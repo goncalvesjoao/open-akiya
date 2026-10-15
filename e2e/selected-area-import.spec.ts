@@ -69,6 +69,7 @@ test('imports the explicitly selected synthetic area and retains saved results a
     expect(boundary.methods).toEqual([
       'areaResults',
       'cancelImport',
+      'cancelImportRequest',
       'createImportRequest',
       'inspectImport',
       'inspectImportRequest',
