@@ -688,7 +688,7 @@ export class ImportRuntime {
     else if (unchanged) job.counts.unchanged++
     else job.counts.updated++
   }
-  private upgradeProgressIdentities(progress: Progress) {
+  private upgradeProgress(job: ImportJob, progress: Progress) {
     // Old progress keys omitted transaction type. Resolve committed offers from
     // their migrated keys, so a repeated candidate after restart stays checked
     // without suppressing a distinct sale/rental variant.
@@ -731,6 +731,29 @@ export class ImportRuntime {
           }),
         ),
       ]
+    }
+    // Completed also includes rejections. Recover useful work only from this
+    // source's retained successful checks during the interrupted execution.
+    if (progress.sourceSaved === undefined) {
+      const sourceId =
+        this.adapters[progress.sourceIndex]?.capabilities.sourceId
+      progress.sourceSaved = progress.completed.filter((identity) => {
+        if (!identity.startsWith('[')) return false
+        const [completedSource, externalId, transactionType] =
+          JSON.parse(identity)
+        if (completedSource !== sourceId) return false
+        const row = this.db
+          .prepare(
+            'SELECT listings.data FROM listings JOIN offer_keys ON listings.id=offer_keys.listing_id WHERE offer_keys.source_id=? AND offer_keys.external_id=? AND offer_keys.transaction_type=?',
+          )
+          .get(sourceId, externalId, transactionType)
+        if (!row || !job.startedAt) return false
+        const listing: ListingProjection = JSON.parse(String(row.data))
+        return (
+          listing.sourceCheckedAt !== null &&
+          Date.parse(listing.sourceCheckedAt) >= Date.parse(job.startedAt)
+        )
+      }).length
     }
   }
   private async parse<T>(operation: () => T | Promise<T>): Promise<T> {
@@ -786,8 +809,14 @@ export class ImportRuntime {
           'Saved source configuration is unavailable',
         )
       const progress: Progress = JSON.parse(String(row.progress))
-      this.upgradeProgressIdentities(progress)
+      this.upgradeProgress(job, progress)
       job.counts.discovered = progress.discovered.length
+      // Retain the upgrade before outbound work: a later failed transaction
+      // restores this durable progress rather than discarding recovered evidence.
+      this.transaction(() => {
+        this.ensure(job)
+        this.saveProgress(job, progress)
+      })
       for (; progress.sourceIndex < this.adapters.length;) {
         const adapter = this.adapters[progress.sourceIndex]
         const source = job.sources[progress.sourceIndex]
