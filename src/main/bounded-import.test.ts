@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, test } from 'vitest'
 import { ImportRuntime } from './runtime'
+import { testClock } from './test-clock'
 import { syntheticAdapter } from './adapter'
 import { initialArea } from '../shared/geography'
 
@@ -13,16 +14,12 @@ afterEach(async () => {
   for (const runtime of runtimes.splice(0)) await runtime.close()
 })
 test('retries rate limits through counted, paced transport and honors Retry-After', async () => {
-  let clock = 0
+  const clock = testClock(0)
   const starts: number[] = []
   const runtime = new ImportRuntime(':memory:', 0, {
-    now: () => clock,
-    leaseMs: 1000000000,
-    wait: async (ms) => {
-      clock += ms
-    },
+    ...clock,
     transport: async () => {
-      starts.push(clock)
+      starts.push(clock.now())
       return starts.length === 1
         ? { status: 429, headers: { 'retry-after': '5' } }
         : { status: 200 }
@@ -45,7 +42,7 @@ test('retries rate limits through counted, paced transport and honors Retry-Afte
 })
 
 test('keeps successful sources and empty discovery distinct from a failed source', async () => {
-  let clock = 0
+  const clock = testClock(0)
   const good = syntheticAdapter(0)
   const bad = {
     ...good,
@@ -53,11 +50,7 @@ test('keeps successful sources and empty discovery distinct from a failed source
   }
   const runtime = new ImportRuntime(':memory:', 0, {
     adapters: [bad, good],
-    now: () => clock,
-    leaseMs: 1000000000,
-    wait: async (ms) => {
-      clock += ms
-    },
+    ...clock,
     transport: async () => ({ status: 403 }),
   })
   // Only the first adapter is blocked; the second discovery is a genuine empty result.
@@ -87,14 +80,10 @@ test('keeps successful sources and empty discovery distinct from a failed source
 })
 
 test('exhausted discovery attempts retain committed listings without complete coverage', async () => {
-  let clock = 0
+  const clock = testClock(0)
   const base = syntheticAdapter(0)
   const runtime = new ImportRuntime(':memory:', 0, {
-    now: () => clock,
-    leaseMs: 1000000000,
-    wait: async (ms) => {
-      clock += ms
-    },
+    ...clock,
     adapters: [
       {
         ...base,
@@ -132,14 +121,10 @@ test('exhausted discovery attempts retain committed listings without complete co
 
 test('rejects off-host redirects before another attempt and bounds rate-limit retries', async () => {
   for (const status of [302, 429]) {
-    let clock = 0
+    const clock = testClock(0)
     let attempts = 0
     const runtime = new ImportRuntime(':memory:', 0, {
-      now: () => clock,
-      leaseMs: 1000000000,
-      wait: async (ms) => {
-        clock += ms
-      },
+      ...clock,
       transport: async () => {
         attempts++
         return {
@@ -167,14 +152,10 @@ test('rejects off-host redirects before another attempt and bounds rate-limit re
 })
 
 test('parser rejection cannot certify complete coverage or expose raw adapter errors', async () => {
-  let clock = 0
+  const clock = testClock(0)
   const base = syntheticAdapter(0)
   const runtime = new ImportRuntime(':memory:', 0, {
-    now: () => clock,
-    leaseMs: 1000000000,
-    wait: async (ms) => {
-      clock += ms
-    },
+    ...clock,
     adapters: [
       {
         ...base,
@@ -206,14 +187,10 @@ test('parser rejection cannot certify complete coverage or expose raw adapter er
 })
 
 test('detail attempts stop at 100 and known-outside candidates consume no details', async () => {
-  let clock = 0
+  const clock = testClock(0)
   const base = syntheticAdapter(0)
   const runtime = new ImportRuntime(':memory:', 0, {
-    now: () => clock,
-    leaseMs: 1000000000,
-    wait: async (ms) => {
-      clock += ms
-    },
+    ...clock,
     adapters: [
       {
         ...base,
@@ -257,15 +234,11 @@ test('detail attempts stop at 100 and known-outside candidates consume no detail
 
 test('timeouts have bounded retries and cancellation aborts transport without retrying', async () => {
   for (const cancel of [false, true]) {
-    let clock = 0
+    const clock = testClock(0)
     let attempts = 0
     let aborted = false
     const runtime = new ImportRuntime(':memory:', 0, {
-      now: () => clock,
-      leaseMs: 1000000000,
-      wait: async (ms) => {
-        clock += ms
-      },
+      ...clock,
       requestTimeoutMs: 5,
       transport: async (_url, options) => {
         attempts++
@@ -303,21 +276,17 @@ test('timeouts have bounded retries and cancellation aborts transport without re
 })
 
 test('serializes concurrent requests across sources and counts every allowed redirect hop', async () => {
-  let clock = 0
+  const clock = testClock(0)
   let active = 0
   let maximum = 0
   const starts: number[] = []
   const base = syntheticAdapter(0)
   const runtime = new ImportRuntime(':memory:', 0, {
-    now: () => clock,
-    leaseMs: 1000000000,
-    wait: async (ms) => {
-      clock += ms
-    },
+    ...clock,
     transport: async (url) => {
       active++
       maximum = Math.max(maximum, active)
-      starts.push(clock)
+      starts.push(clock.now())
       await Promise.resolve()
       active--
       return url.endsWith('/redirect')
@@ -357,14 +326,10 @@ test('serializes concurrent requests across sources and counts every allowed red
 })
 
 test('failed refresh preserves the previous listing and successful-check timestamp', async () => {
-  let clock = Date.parse('2026-10-16T00:00:00Z')
+  const clock = testClock(Date.parse('2026-10-16T00:00:00Z'))
   let blocked = false
   const runtime = new ImportRuntime(':memory:', 0, {
-    now: () => clock,
-    leaseMs: 1000000000,
-    wait: async (ms) => {
-      clock += ms
-    },
+    ...clock,
     transport: async () => ({ status: blocked ? 403 : 200 }),
   })
   runtimes.push(runtime)
@@ -378,7 +343,7 @@ test('failed refresh preserves the previous listing and successful-check timesta
     showUnavailable: true,
   }).listings
   blocked = true
-  clock += 100000
+  clock.advance(100000)
   const second = runtime.createRequest({
     ...input,
     idempotencyKey: 'failed-refresh',
@@ -401,12 +366,12 @@ test('restart honors a durable retry deadline and retains scope evidence private
   const directory = mkdtempSync(join(tmpdir(), 'bounded-import-'))
   const path = join(directory, 'db.sqlite')
   let waiting = false
-  let clock = 0
+  const clock = testClock(0)
   const first = new ImportRuntime(path, 0, {
-    now: () => clock,
-    leaseMs: 1000000000,
+    ...clock,
     transport: async () => ({ status: 429, headers: { 'retry-after': '5' } }),
     wait: async (_ms, signal) => {
+      signal.throwIfAborted()
       waiting = true
       await new Promise<void>((resolve) =>
         signal.addEventListener('abort', () => resolve(), { once: true }),
@@ -437,13 +402,9 @@ test('restart honors a durable retry deadline and retains scope evidence private
     saved.close()
     const starts: number[] = []
     second = new ImportRuntime(path, 0, {
-      now: () => clock,
-      leaseMs: 1000000000,
-      wait: async (ms) => {
-        clock += ms
-      },
+      ...clock,
       transport: async () => {
-        starts.push(clock)
+        starts.push(clock.now())
         return { status: 200 }
       },
     })
@@ -464,13 +425,9 @@ test('restart honors a durable retry deadline and retains scope evidence private
 })
 
 test('saved resumable discovery is useful partial progress even before the first detail commits', async () => {
-  let clock = 0
+  const clock = testClock(0)
   const runtime = new ImportRuntime(':memory:', 0, {
-    now: () => clock,
-    leaseMs: 1000000000,
-    wait: async (ms) => {
-      clock += ms
-    },
+    ...clock,
     transport: async (url) => ({
       status: url.includes('/offers/') ? 403 : 200,
     }),
@@ -495,4 +452,98 @@ test('saved resumable discovery is useful partial progress even before the first
       },
     ],
   })
+})
+
+test('persists long and final Retry-After cooldowns across sources, jobs and restart', async () => {
+  for (const finalAttempt of [false, true]) {
+    for (const restart of [false, true]) {
+      const directory = mkdtempSync(join(tmpdir(), 'host-cooldown-'))
+      const path = join(directory, 'db.sqlite')
+      const clock = testClock(0)
+      const starts: number[] = []
+      let attempts = 0
+      const base = syntheticAdapter(0)
+      const empty = {
+        ...base,
+        async discover(
+          _input: unknown,
+          context: Parameters<typeof base.discover>[1],
+        ) {
+          await context.request(
+            'discovery',
+            'https://example.invalid/discovery',
+          )
+          return {
+            candidates: [],
+            exhausted: true,
+            nextCursor: null,
+            limitation: null,
+          }
+        },
+      }
+      const other = {
+        ...empty,
+        capabilities: { ...empty.capabilities, sourceId: 'other' },
+      }
+      const adapters = restart ? [empty] : [empty, other]
+      const transport = async () => {
+        starts.push(clock.now())
+        attempts++
+        if (attempts <= (finalAttempt ? 3 : 1))
+          return {
+            status: finalAttempt ? 503 : 429,
+            headers: {
+              'retry-after': finalAttempt
+                ? attempts < 3
+                  ? '0'
+                  : new Date(clock.now() + 3600000).toUTCString()
+                : '3600',
+            },
+          }
+        return { status: 200 }
+      }
+      let runtime = new ImportRuntime(path, 0, {
+        ...clock,
+        adapters,
+        transport,
+      })
+      try {
+        const request = runtime.createRequest({
+          area: initialArea,
+          intent: 'import',
+          idempotencyKey: 'first',
+        })
+        await expect
+          .poll(() => runtime.inspect(request.jobIds[0]).stage)
+          .toBe('finished')
+        const due = finalAttempt ? 3604000 : 3600000
+        if (restart) {
+          runtime.createRequest({
+            area: initialArea,
+            intent: 'import',
+            idempotencyKey: 'next',
+          })
+          await runtime.close()
+          const saved = new DatabaseSync(path)
+          expect(
+            saved.prepare('SELECT next_at FROM source_host_limits').get()
+              ?.next_at,
+          ).toBe(due)
+          saved.close()
+          runtime = new ImportRuntime(path, 0, {
+            ...clock,
+            adapters,
+            transport,
+          })
+          await expect
+            .poll(() => runtime.list({ state: 'active' }).jobs)
+            .toHaveLength(0)
+        }
+        expect(starts).toEqual(finalAttempt ? [0, 2000, 4000, due] : [0, due])
+      } finally {
+        await runtime.close()
+        rmSync(directory, { recursive: true, force: true })
+      }
+    }
+  }
 })

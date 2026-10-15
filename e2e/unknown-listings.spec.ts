@@ -5,6 +5,9 @@ import { join } from 'node:path'
 
 // The integrated map must retain unknown offers without inventing Leaflet markers.
 test('inspects area-associated unknown offers without pins or house distances', async () => {
+  // Ten fixture details are paced at two seconds each. Preserve production
+  // traffic controls and allow the import to reach these later fixtures.
+  test.setTimeout(60000)
   const directory = mkdtempSync(join(tmpdir(), 'akiya-unknown-'))
   const application = await electron.launch({
     args: [
@@ -23,7 +26,7 @@ test('inspects area-associated unknown offers without pins or house distances', 
         name: 'Unknown-location sample listing',
         exact: true,
       }),
-    ).toBeVisible()
+    ).toBeVisible({ timeout: 30000 })
     await expect(unknown).toContainText('Exact location and distance unknown')
     await expect(unknown).not.toContainText(/\d+\.\d+ km/)
     await expect(

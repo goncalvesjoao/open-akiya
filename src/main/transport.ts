@@ -148,12 +148,22 @@ export function workerRequest(input: {
                   'Source temporarily unavailable',
                   true,
                 )
-          if (retries++ >= 2) throw error
           const value = headers['retry-after']
           const seconds =
             value && /^\d+$/.test(value)
               ? Number(value) * 1000
               : Date.parse(value ?? '') - input.now()
+          // A source-wide cooldown applies even when this request will not
+          // retry. Persist it before either exhaustion or long-wait decisions.
+          if (Number.isFinite(seconds) && seconds > 0) {
+            const deadline = input.now() + seconds
+            input.saveNext(
+              parsed.hostname,
+              Math.max(input.next(parsed.hostname), deadline),
+            )
+            input.retry(deadline)
+          }
+          if (retries++ >= 2) throw error
           const delay = Math.max(
             1000 * 2 ** (retries - 1),
             Number.isFinite(seconds) ? seconds : 0,
