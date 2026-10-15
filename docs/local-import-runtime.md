@@ -6,26 +6,25 @@ Install Node.js 22.12+, npm and Docker. `npm install` includes the pinned Supaba
 
 ```sh
 npm install
-npx supabase start
 cp .env.example .env.local
 ```
 
-Set these server-only entries in `.env.local` using the local database URL printed by Supabase:
+Set these server-only entries in `.env.local` using the local database URL from the committed Supabase configuration (default below):
 
 ```dotenv
 DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable
 INSTALLATION_SESSION_TOKEN=replace-with-a-random-secret-of-at-least-32-characters
 ```
 
-Supabase prints its local database URL. Append `?sslmode=disable` for this local, unencrypted database; keep TLS enabled for database connections that require it. A standalone local Postgres with the Supabase roles can also run the migrations and tests without Docker; Docker is needed to start the full Supabase stack.
+`npm run backend:dev` starts Supabase and prints its local database URL; `DATABASE_URL` must point to that same local stack. Append `?sslmode=disable` for this local, unencrypted database; keep TLS enabled for database connections that require it. A standalone local Postgres with the Supabase roles can also run the migrations and tests without Docker; Docker is needed to start the full Supabase stack.
 
 Generate a token with `openssl rand -hex 32`. Keep it in your local environment file. Never prefix the database URL or session token with `VITE_`, commit them, or place them in browser bundles. The runtime uses a privileged database connection to private operational tables; browsers cannot read those tables directly.
 
 ```sh
-npm run dev:local
+npm run backend:dev
 ```
 
-This npm command loads `.env.local` through the pinned `dotenv-cli`, then invokes the pinned Supabase CLI with the explicit `DATABASE_URL`. Only after migrations succeed does `concurrently` start Vite, the loopback API and a separate worker with named output. Ctrl+C or any service exit stops its peers. The frontend uses strict port 5173 to match the allowed origins. A missing database URL stops startup; the API validates the installation session token and a validation failure stops the service group. The worker continues when a browser tab closes. Stopping this command stops the processes; saved queued jobs and committed offers remain in Postgres. Restarting processes preserves the idempotency mapping. Recovery of an interrupted running job is implemented by ticket #18. One installation executes one import at a time.
+This npm command loads `.env.local` through the pinned `dotenv-cli`, starts local Supabase, then applies pending migrations through the pinned CLI using the explicit `DATABASE_URL`. Only after Supabase startup and migrations succeed does `concurrently` start the loopback API and a separate worker with named output. Ctrl+C or either service exiting stops its peer. Supabase containers remain running; stop them separately with `npx supabase stop`. In a second terminal, run `npm run frontend:dev`; its strict loopback port 5173 matches the allowed origins. The frontend and backend commands have independent lifetimes. A missing database URL stops startup; the API validates the installation session token and a validation failure stops the service group. The worker continues when a browser tab closes. Stopping this command stops the processes; saved queued jobs and committed offers remain in Postgres. Restarting processes preserves the idempotency mapping. Recovery of an interrupted running job is implemented by ticket #18. One installation executes one import at a time.
 
 The API listens on `127.0.0.1:8787`. Allowed browser origins are `http://localhost:5173` and `http://127.0.0.1:5173`. Mutation calls require an allowed Origin, the installation token, JSON content type and, for create, an idempotency key. Repeating the same key and semantic input returns the saved request; reusing it with different input is a conflict.
 
@@ -88,4 +87,6 @@ The transition was checked on a copy of the earlier runner's database on 2026-10
 
 The pinned CLI migration path was also verified against standalone PostgreSQL 18.6 without Docker: fresh migrations populated only the Supabase history, repeating them preserved saved listing data, and the API/worker/frontend startup smoke still produced a succeeded one-listing import. The pinned CLI also completed a repeated migration run under the documented minimum Node.js 22.12.0.
 
-The replacement `npm run dev:local` path was smoke-tested on 2026-10-15 with temporary `.env.local` files under Node.js 22.12.0 and 26.8.2. Migrations completed before named API/worker/frontend output, and the API returned HTTP 202 followed by a succeeded import and one saved listing. Failed migrations and missing database URLs started no services; a weak session token caused API validation to stop the group. Ctrl+C, a clean API exit and an API bind failure all left no child processes or listeners on ports 8787 and 5173. `dotenv-cli` loads the file once so migration and service commands inherit the same environment; `concurrently --kill-others --success first` propagates the first service's outcome while stopping its peers.
+The former combined `npm run dev:local` path (now replaced by separate frontend/backend commands) was smoke-tested on 2026-10-15 with temporary `.env.local` files under Node.js 22.12.0 and 26.8.2. Migrations completed before named API/worker/frontend output, and the API returned HTTP 202 followed by a succeeded import and one saved listing. Failed migrations and missing database URLs started no services; a weak session token caused API validation to stop the group. Ctrl+C, a clean API exit and an API bind failure all left no child processes or listeners on ports 8787 and 5173. `dotenv-cli` loads the file once so migration and service commands inherit the same environment; `concurrently --kill-others --success first` propagates the first service's outcome while stopping its peers.
+
+The separate commands were checked on 2026-10-15: `frontend:dev` served the sample app independently on loopback port 5173. The complete `backend:dev` command stopped at this machine's Docker socket permission error before launching API/worker services; a successful full Supabase-container startup remains unverified here. The actual post-Supabase migration/API/worker phase was exercised separately against native PostgreSQL: migration failure launched no services, a successful import returned HTTP 202 then succeeded with one saved listing, and backend Ctrl+C stopped its processes while the independent frontend stayed available. Stopping the frontend then removed its own listener.

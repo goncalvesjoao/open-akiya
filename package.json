@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "test": "vitest run",
@@ -14,10 +13,11 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "preview": "vite preview",
-    "dev:local": "dotenv -e .env.local -- npm run dev:local:start",
     "db:migrate": "supabase migration up --local",
     "test:server": "tsx scripts/test-server.ts",
-    "dev:local:start": "supabase migration up --db-url \"${DATABASE_URL:?DATABASE_URL must be set in .env.local}\" && concurrently --kill-others --success first --names api,worker,web \"tsx server/main.ts\" \"tsx server/worker-main.ts\" \"vite --host 127.0.0.1 --strictPort\""
+    "frontend:dev": "vite --host 127.0.0.1 --strictPort",
+    "backend:dev": "dotenv -e .env.local -- npm run backend:dev:start",
+    "backend:dev:start": "supabase start && supabase migration up --db-url \"${DATABASE_URL:?DATABASE_URL must be set in .env.local}\" && concurrently --kill-others --success first --names api,worker \"tsx server/main.ts\" \"tsx server/worker-main.ts\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",

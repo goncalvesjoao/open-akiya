@@ -14,23 +14,22 @@ Requires Node.js 22.12+ and npm.
 
 ```sh
 npm install
-npm run dev
+npm run frontend:dev
 ```
 
-For persistent synthetic imports, start Docker and set up the local Supabase stack. The pinned CLI and project configuration are included:
+For persistent synthetic imports, start Docker and configure the local backend. The pinned CLI and project configuration are included:
 
 ```sh
-npx supabase start
 cp .env.example .env.local
 ```
 
 In `.env.local`, set `DATABASE_URL` to the local connection URL with `?sslmode=disable`, and set `INSTALLATION_SESSION_TOKEN` to a random secret of at least 32 characters (`openssl rand -hex 32` generates one). Keep both server-only; never add a `VITE_` prefix.
 
 ```sh
-npm run dev:local
+npm run backend:dev
 ```
 
-The npm scripts load `.env.local`, apply migrations through Supabase CLI with the configured `DATABASE_URL`, then use `concurrently` to start the loopback frontend, API and independent worker with named output. Ctrl+C or any service exit stops the other services. See [local runtime setup](docs/local-import-runtime.md) for the API journey and existing-database transition.
+The backend command loads `.env.local`, starts local Supabase, applies pending migrations to the configured `DATABASE_URL`, then runs the API and independent worker together with named output. Use the database URL for that local Supabase stack. Run `npm run frontend:dev` in a second terminal. Stopping either terminal leaves the other running; Ctrl+C or a service exit stops the API/worker pair. Supabase containers remain running until `npx supabase stop`. See [local runtime setup](docs/local-import-runtime.md) for the API journey and existing-database transition.
 
 To apply only migrations to the standard local Supabase stack, run `npm run db:migrate` (`supabase migration up --local`). This command targets that stack and does not read `.env.local`. For an alternate Postgres, export its connection URL in your shell and run the CLI explicitly:
 
@@ -42,7 +41,7 @@ Startup and database tests use their explicit database URLs; no application migr
 
 Open the local URL printed by Vite. The landing page runs without Supabase credentials.
 
-To connect a backend, copy `.env.example` to `.env.local`, then set:
+For the optional browser Supabase client, set these public credentials in `.env.local`:
 
 ```dotenv
 VITE_SUPABASE_URL=https://your-project.supabase.co
