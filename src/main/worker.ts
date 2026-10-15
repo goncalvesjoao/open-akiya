@@ -1,6 +1,11 @@
 import { ImportRuntime } from './runtime'
 import { syntheticAdapter } from './adapter'
-import { fixtures, uncertainFixtures, municipalityFixtures } from './fixtures'
+import {
+  fixtures,
+  uncertainFixtures,
+  municipalityFixtures,
+  unknownFixtures,
+} from './fixtures'
 import { safeError } from './errors'
 import type { WorkerRequest } from '../shared/desktop'
 
@@ -10,6 +15,7 @@ const runtime = new ImportRuntime(process.argv[2], 300, {
       fixtures[0],
       ...uncertainFixtures,
       ...municipalityFixtures,
+      ...unknownFixtures,
     ]),
   ],
 })

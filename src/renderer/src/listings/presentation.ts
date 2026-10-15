@@ -9,6 +9,12 @@ const sampleTitles: Record<string, string> = {
     'Municipality sample listing without a point',
   'sample-municipality-source-point-1':
     'Municipal office source-point sample listing',
+  'sample-precise-outside-1':
+    'Precise-location sample listing outside the discovery area',
+  'sample-location-unknown-1': 'Unknown-location sample listing',
+  'sample-location-unknown-unavailable-1':
+    'Unavailable unknown-location sample listing',
+  'sample-location-unrelated-1': 'Unrelated unknown-location sample listing',
   'sample-unverified-1': 'Unverified sample listing',
   'sample-approximate-1': 'Approximate sample listing',
   'sample-unverified-unavailable-1': 'Unavailable unverified sample listing',

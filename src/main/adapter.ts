@@ -5,7 +5,12 @@ import type {
   Location,
   SelectedArea,
 } from '../shared/listings'
-import { fixtures, municipalitySourcePointEvidence } from './fixtures'
+import { areasIntersect } from '../shared/geography'
+import {
+  fixtures,
+  municipalitySourcePointEvidence,
+  syntheticDiscoveryAreas,
+} from './fixtures'
 import { locationMatchesArea } from './listing-area'
 
 export type AdapterCapabilities = {
@@ -118,20 +123,30 @@ export function syntheticAdapter(
     },
     async discover({ area }, context) {
       await context.request('discovery', 'https://example.invalid/discovery')
-      const inside = offers.filter((offer) =>
-        locationMatchesArea(offer.location, area),
-      )
+      const inside = offers.filter((offer) => {
+        const scope = syntheticDiscoveryAreas.get(
+          offer.sourceRefs[0].externalId,
+        )
+        return scope
+          ? areasIntersect(area, scope)
+          : locationMatchesArea(offer.location, area)
+      })
       return {
         candidates: inside.map((offer) => ({
           externalId: offer.sourceRefs[0].externalId,
           transactionType: offer.transactionType,
           url: offer.primarySourceUrl,
-          location: offer.location,
+          location: syntheticDiscoveryAreas.has(offer.sourceRefs[0].externalId)
+            ? { kind: 'unknown' }
+            : offer.location,
           municipalityId: offer.municipalityId,
           publishedAt: null,
           modifiedAt: null,
           relevance:
-            offer.location.kind === 'verified' ? 'known_inside' : 'plausible',
+            offer.location.kind === 'verified' &&
+            !syntheticDiscoveryAreas.has(offer.sourceRefs[0].externalId)
+              ? 'known_inside'
+              : 'plausible',
         })),
         nextCursor: null,
         exhausted: true,
