@@ -84,6 +84,8 @@ export class ImportRuntime {
       CREATE TABLE IF NOT EXISTS offer_keys (source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, listing_id TEXT NOT NULL REFERENCES listings(id), PRIMARY KEY(source_id,external_id,transaction_type));
       INSERT OR IGNORE INTO offer_keys SELECT source_id, coalesce(json_extract(data,'$.sourceRefs[0].externalId'),external_id), json_extract(data,'$.transactionType'),id FROM listings;
       CREATE TABLE IF NOT EXISTS offer_observations (source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id,external_id,transaction_type));
+      CREATE TABLE IF NOT EXISTS offer_observation_history (id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, data TEXT NOT NULL);
+      INSERT INTO offer_observation_history(source_id,external_id,transaction_type,data) SELECT o.source_id,o.external_id,o.transaction_type,o.data FROM offer_observations o WHERE NOT EXISTS (SELECT 1 FROM offer_observation_history h WHERE h.source_id=o.source_id AND h.external_id=o.external_id AND h.transaction_type=o.transaction_type);
       CREATE TABLE IF NOT EXISTS observations (source_id TEXT NOT NULL, external_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id,external_id));`)
     this.schedule()
   }
@@ -513,7 +515,7 @@ export class ImportRuntime {
           fields.rentMonthlyJpy < 0))
     )
       invalid('Invalid source money')
-    const prior = this.db
+    let prior = this.db
       .prepare(
         'SELECT listings.data FROM listings JOIN offer_keys ON listings.id=offer_keys.listing_id WHERE offer_keys.source_id=? AND offer_keys.external_id=? AND transaction_type=?',
       )
@@ -522,8 +524,49 @@ export class ImportRuntime {
         observation.identity.externalId,
         candidate.transactionType,
       )
+    const duplicate = observation.confirmedDuplicateOf
+    if (duplicate !== undefined) {
+      if (
+        !record(duplicate) ||
+        typeof duplicate.evidence !== 'string' ||
+        !duplicate.evidence.trim() ||
+        duplicate.sourceId === observation.identity.sourceId
+      )
+        invalid('Invalid confirmed duplicate evidence')
+      identifier(duplicate.sourceId)
+      identifier(duplicate.externalId)
+      const target = this.db
+        .prepare(
+          'SELECT listings.data FROM listings JOIN offer_keys ON listings.id=offer_keys.listing_id WHERE offer_keys.source_id=? AND offer_keys.external_id=? AND transaction_type=?',
+        )
+        .get(
+          duplicate.sourceId,
+          duplicate.externalId,
+          candidate.transactionType,
+        )
+      if (
+        !target ||
+        (prior &&
+          JSON.parse(String(prior.data)).id !==
+            JSON.parse(String(target.data)).id)
+      )
+        invalid('Unresolved or conflicting confirmed duplicate')
+      prior = target
+    }
     const previous: ListingProjection | undefined = prior
       ? JSON.parse(String(prior.data))
+      : undefined
+    const savedObservation = this.db
+      .prepare(
+        'SELECT data FROM offer_observations WHERE source_id=? AND external_id=? AND transaction_type=?',
+      )
+      .get(
+        observation.identity.sourceId,
+        observation.identity.externalId,
+        candidate.transactionType,
+      )
+    const saved: SourceObservation | undefined = savedObservation
+      ? JSON.parse(String(savedObservation.data))
       : undefined
     const removalEvidence = (key: keyof NormalizedFields) =>
       typeof observation.provenance[key] === 'string' &&
@@ -575,7 +618,14 @@ export class ImportRuntime {
       firstSeenAt: observation.sourceCheckedAt,
       lastSeenAt: observation.sourceCheckedAt,
       sourceCheckedAt: observation.sourceCheckedAt,
-      ...previous,
+      ...(previous?.sourceRefs.some(
+        (ref) =>
+          ref.sourceId === source.sourceId &&
+          ref.externalId === source.externalId,
+      )
+        ? previous
+        : previous && { id: previous.id, firstSeenAt: previous.firstSeenAt }),
+      ...saved?.fields,
       ...fields,
     })
     listing.lastSeenAt = observation.sourceCheckedAt
@@ -590,8 +640,6 @@ export class ImportRuntime {
       invalid('Invalid normalized listing')
     const businessFields = (value: ListingProjection) =>
       JSON.stringify(fieldNames.map((key) => value[key]))
-    const unchanged =
-      previous && businessFields(previous) === businessFields(listing)
     this.db
       .prepare(
         'INSERT INTO offer_observations VALUES (?,?,?,?) ON CONFLICT(source_id,external_id,transaction_type) DO UPDATE SET data=excluded.data',
@@ -602,6 +650,9 @@ export class ImportRuntime {
         candidate.transactionType,
         JSON.stringify({
           ...observation,
+          ...(saved?.confirmedDuplicateOf && !duplicate
+            ? { confirmedDuplicateOf: saved.confirmedDuplicateOf }
+            : {}),
           contentHash: createHash('sha256')
             .update(businessFields(listing))
             .digest('hex'),
@@ -610,6 +661,61 @@ export class ImportRuntime {
           ),
         }),
       )
+    this.db
+      .prepare(
+        'INSERT INTO offer_observation_history(source_id,external_id,transaction_type,data) SELECT source_id,external_id,transaction_type,data FROM offer_observations WHERE source_id=? AND external_id=? AND transaction_type=?',
+      )
+      .run(source.sourceId, source.externalId, candidate.transactionType)
+    if (previous) {
+      const isPrimary =
+        previous.sourceRefs[0].sourceId === source.sourceId &&
+        previous.sourceRefs[0].externalId === source.externalId
+      if (!isPrimary)
+        for (const key of fieldNames)
+          Object.assign(listing, { [key]: previous[key] })
+      listing.sourceRefs = previous.sourceRefs.some(
+        (ref) =>
+          ref.sourceId === source.sourceId &&
+          ref.externalId === source.externalId,
+      )
+        ? previous.sourceRefs
+        : [...previous.sourceRefs, source]
+      listing.primarySourceUrl = previous.primarySourceUrl
+      const evidence = listing.sourceRefs.map((ref) => {
+        const row = this.db
+          .prepare(
+            'SELECT data FROM offer_observations WHERE source_id=? AND external_id=? AND transaction_type=?',
+          )
+          .get(ref.sourceId, ref.externalId, candidate.transactionType)
+        return row
+          ? (JSON.parse(String(row.data)) as SourceObservation)
+          : undefined
+      })
+      const supporting = evidence.filter(
+        (entry) => entry?.fields.availability !== 'unavailable',
+      )
+      const availability = supporting.map((entry) => entry?.fields.availability)
+      listing.availability = !supporting.length
+        ? 'unavailable'
+        : availability.includes('available')
+          ? 'available'
+          : availability.includes('under_offer')
+            ? 'under_offer'
+            : 'unknown'
+      // Primary business facts remain displayed even after its source withdraws.
+      const times = evidence.map((entry) => entry?.sourceCheckedAt ?? null)
+      listing.sourceCheckedAt = times.includes(null)
+        ? null
+        : times.reduce<string | null>(
+            (earliest, time) =>
+              earliest === null ||
+              (time !== null && Date.parse(time) < Date.parse(earliest))
+                ? time
+                : earliest,
+            null,
+          )
+      listing.lastSeenAt = listing.sourceCheckedAt
+    }
     this.db
       .prepare(
         'INSERT INTO listings VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
@@ -637,6 +743,10 @@ export class ImportRuntime {
     this.db
       .prepare('INSERT OR IGNORE INTO listing_discovery_areas VALUES (?,?)')
       .run(listing.id, JSON.stringify(job.area))
+    const unchanged =
+      previous &&
+      businessFields(previous) === businessFields(listing) &&
+      JSON.stringify(previous.sourceRefs) === JSON.stringify(listing.sourceRefs)
     if (!previous) job.counts.added++
     else if (unchanged) job.counts.unchanged++
     else job.counts.updated++
