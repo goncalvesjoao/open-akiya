@@ -5,8 +5,13 @@ import type {
   Location,
   SelectedArea,
 } from '../shared/listings'
-import { areasIntersect, distanceMetres } from '../shared/geography'
-import { fixtures, syntheticDiscoveryAreas } from './fixtures'
+import { areasIntersect } from '../shared/geography'
+import {
+  fixtures,
+  municipalitySourcePointEvidence,
+  syntheticDiscoveryAreas,
+} from './fixtures'
+import { locationMatchesArea } from './listing-area'
 
 export type AdapterCapabilities = {
   sourceId: string
@@ -93,6 +98,17 @@ export function syntheticAdapter(
   delayMs = 300,
   offers: ListingProjection[] = [fixtures[0]],
 ): SourceAdapter {
+  offers = offers.map((offer): ListingProjection => {
+    const municipalityId =
+      municipalitySourcePointEvidence[offer.sourceRefs[0].externalId]
+    return municipalityId && offer.sourceRefs[0].sourceId === 'fixture'
+      ? {
+          ...offer,
+          municipalityId,
+          location: { kind: 'municipality', municipalityId },
+        }
+      : offer
+  })
   const listing = offers[0]
   const source = listing.sourceRefs[0]
   return {
@@ -111,13 +127,9 @@ export function syntheticAdapter(
         const scope = syntheticDiscoveryAreas.get(
           offer.sourceRefs[0].externalId,
         )
-        if (scope) return areasIntersect(area, scope)
-        return (
-          (offer.location.kind === 'verified' ||
-            offer.location.kind === 'unverified') &&
-          distanceMetres(area.center, offer.location.point) <=
-            area.radiusKm * 1000 + 1e-8
-        )
+        return scope
+          ? areasIntersect(area, scope)
+          : locationMatchesArea(offer.location, area)
       })
       return {
         candidates: inside.map((offer) => ({
@@ -127,7 +139,7 @@ export function syntheticAdapter(
           location: syntheticDiscoveryAreas.has(offer.sourceRefs[0].externalId)
             ? { kind: 'unknown' }
             : offer.location,
-          municipalityId: null,
+          municipalityId: offer.municipalityId,
           publishedAt: null,
           modifiedAt: null,
           relevance:

@@ -1,10 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
-import {
-  areasIntersect,
-  distanceMetres,
-  isSelectedArea,
-} from '../shared/geography'
+import { areasIntersect, isSelectedArea } from '../shared/geography'
 import type {
   AreaResults,
   Coverage,
@@ -22,6 +18,9 @@ import {
 } from './adapter'
 import { invalid, LocalApiError, safeError } from './errors'
 import { listingProjection } from './projection'
+import { municipalityReference } from './municipalities'
+import { locationMatchesArea } from './listing-area'
+import type { MunicipalityGroup } from '../shared/listings'
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -299,29 +298,44 @@ export class ImportRuntime {
       .prepare('SELECT data FROM listings')
       .all()
       .map((row) => listingProjection(JSON.parse(String(row.data))))
+    const visible = listings.filter(
+      (listing) =>
+        (showUnavailable || listing.availability !== 'unavailable') &&
+        (listing.location.kind === 'unknown'
+          ? this.db
+              .prepare(
+                'SELECT area FROM listing_discovery_areas WHERE listing_id=?',
+              )
+              .all(listing.id)
+              .some((row) => {
+                const scope: SelectedArea = JSON.parse(String(row.area))
+                return areasIntersect(area, scope)
+              })
+          : locationMatchesArea(listing.location, area)),
+    )
+    const groups = new Map<string, MunicipalityGroup>()
+    for (const listing of visible) {
+      if (listing.location.kind !== 'municipality') continue
+      const municipalityId = listing.location.municipalityId
+      const reference = municipalityReference(municipalityId, area)!
+      const group = groups.get(municipalityId) ?? {
+        municipalityId,
+        nameJa: listing.municipalityNameJa ?? municipalityId,
+        listingIds: [],
+        count: 0,
+        representativePoint: reference.representativePoint,
+        representativePointProvenance: reference.representativePointProvenance,
+      }
+      group.listingIds.push(listing.id)
+      group.count = group.listingIds.length
+      groups.set(municipalityId, group)
+    }
     return {
       area,
       showUnavailable,
       mode: 'synthetic',
-      listings: listings.filter(
-        (listing) =>
-          (showUnavailable || listing.availability !== 'unavailable') &&
-          (listing.location.kind === 'verified' ||
-          listing.location.kind === 'unverified'
-            ? distanceMetres(area.center, listing.location.point) <=
-              area.radiusKm * 1000 + 1e-8
-            : listing.location.kind === 'unknown' &&
-              this.db
-                .prepare(
-                  'SELECT area FROM listing_discovery_areas WHERE listing_id=?',
-                )
-                .all(listing.id)
-                .some((row) => {
-                  const scope: SelectedArea = JSON.parse(String(row.area))
-                  return areasIntersect(area, scope)
-                })),
-      ),
-      municipalityGroups: [],
+      listings: visible,
+      municipalityGroups: [...groups.values()],
       coverage: coverage(null),
       generatedAt: this.time(),
     }

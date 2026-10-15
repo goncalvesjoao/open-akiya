@@ -122,6 +122,51 @@ export const uncertainFixtures: ListingProjection[] = [
   ),
 ]
 
+export const municipalityFixtures: ListingProjection[] = [
+  ...[
+    'municipality-1',
+    'municipality-unavailable-1',
+    'municipality-no-point-1',
+  ].map((name, index) =>
+    fixture(
+      `sample-${name}`,
+      '自治体のみのサンプル',
+      { latitude: 35, longitude: 135 },
+      {
+        municipalityId:
+          index === 2 ? 'fixture:municipality-2' : 'fixture:municipality-1',
+        municipalityNameJa: 'サンプル自治体',
+        location: {
+          kind: 'municipality',
+          municipalityId:
+            index === 2 ? 'fixture:municipality-2' : 'fixture:municipality-1',
+        },
+        availability: index === 1 ? 'unavailable' : 'unknown',
+      },
+    ),
+  ),
+  fixture(
+    'sample-municipality-source-point-1',
+    '自治体代表点のサンプル',
+    { latitude: 35.1, longitude: 135 },
+    {
+      municipalityId: 'fixture:municipality-1',
+      municipalityNameJa: 'サンプル自治体',
+      location: {
+        kind: 'unverified',
+        point: { latitude: 35.1, longitude: 135 },
+        precision: 'unknown',
+        sourceId: 'fixture',
+      },
+    },
+  ),
+]
+
+// Synthetic source evidence explicitly identifies this published coordinate as
+// the municipal office, never an individual offer's position.
+export const municipalitySourcePointEvidence: Record<string, string> = {
+  'municipality-source-point-1': 'fixture:municipality-1',
+}
 // Scope evidence describes the synthetic source query, never a house position.
 export const syntheticDiscoveryAreas = new Map<string, SelectedArea>([
   [

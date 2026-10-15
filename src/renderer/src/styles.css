@@ -147,3 +147,13 @@ a {
 .location-uncertainty {
   color: #704709;
 }
+
+.synthetic-map .municipality-pin {
+  width: 50px;
+  border-radius: 5px;
+  background: #63427c;
+  border: 2px dashed #fff;
+}
+.listing-results summary {
+  cursor: pointer;
+}

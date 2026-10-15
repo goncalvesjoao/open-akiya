@@ -2,6 +2,13 @@ import type { ListingProjection } from '../../../shared/listings'
 
 // Authored English labels for fictional fixtures, not source translations.
 const sampleTitles: Record<string, string> = {
+  'sample-municipality-1': 'Municipality sample listing',
+  'sample-municipality-unavailable-1':
+    'Unavailable municipality sample listing',
+  'sample-municipality-no-point-1':
+    'Municipality sample listing without a point',
+  'sample-municipality-source-point-1':
+    'Municipal office source-point sample listing',
   'sample-precise-outside-1':
     'Precise-location sample listing outside the discovery area',
   'sample-location-unknown-1': 'Unknown-location sample listing',
@@ -28,4 +35,12 @@ export function listingTitle(listing: ListingProjection): string {
     sampleTitles[source ? `sample-${source.externalId}` : listing.id] ??
     'Listing from original source'
   )
+}
+
+export function municipalityTitle(id: string): string {
+  return id === 'fixture:municipality-1'
+    ? 'Sample municipality'
+    : id === 'fixture:municipality-2'
+      ? 'Sample municipality without a point'
+      : 'Municipality'
 }

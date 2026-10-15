@@ -1,11 +1,12 @@
 import ImportControls from './ImportControls'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
-import { listingTitle } from './listings/presentation'
+import { listingTitle, municipalityTitle } from './listings/presentation'
 import 'leaflet/dist/leaflet.css'
 import type {
   AreaResults,
   ListingProjection,
+  MunicipalityGroup,
   SelectedArea,
 } from '../../shared/listings'
 import {
@@ -25,6 +26,12 @@ function money(value: number | null) {
 }
 
 function LocationUncertainty({ listing }: { listing: ListingProjection }) {
+  if (listing.location.kind === 'municipality')
+    return (
+      <span className="location-uncertainty">
+        Exact listing location and distance are unknown. Municipality only.
+      </span>
+    )
   if (listing.location.kind === 'unknown')
     return (
       <span className="location-uncertainty">
@@ -124,12 +131,18 @@ function ListingDetails({ listing }: { listing: ListingProjection }) {
 function MapCanvas({
   area,
   listings,
+  groups,
+  expandedGroup,
+  onGroup,
   selectedId,
   onSelect,
   onArea,
 }: {
   area: SelectedArea
   listings: ListingProjection[]
+  groups: MunicipalityGroup[]
+  expandedGroup: string | null
+  onGroup: (id: string) => void
   selectedId: string | null
   onSelect: (id: string) => void
   onArea: (area: SelectedArea) => void
@@ -216,10 +229,38 @@ function MapCanvas({
         keyboard: false,
       }).addTo(layers)
     }
+    for (const group of groups) {
+      if (!group.representativePoint || !group.representativePointProvenance)
+        continue
+      const button = document.createElement('button')
+      button.type = 'button'
+      button.className = 'listing-pin municipality-pin'
+      button.textContent = `M ${group.count}`
+      button.setAttribute(
+        'aria-label',
+        `Municipality summary: ${municipalityTitle(group.municipalityId)} · ${group.count} ${group.count === 1 ? 'listing' : 'listings'}`,
+      )
+      button.setAttribute(
+        'aria-pressed',
+        String(
+          expandedGroup === group.municipalityId ||
+            group.listingIds.includes(selectedId ?? ''),
+        ),
+      )
+      L.DomEvent.disableClickPropagation(button)
+      button.addEventListener('click', () => onGroup(group.municipalityId))
+      const { latitude, longitude } = group.representativePoint
+      const displayedLongitude =
+        longitude + 360 * Math.round((area.center.longitude - longitude) / 360)
+      L.marker([latitude, displayedLongitude], {
+        icon: L.divIcon({ html: button, className: '', iconSize: [50, 34] }),
+        keyboard: false,
+      }).addTo(layers)
+    }
     return () => {
       layers.remove()
     }
-  }, [area, listings, selectedId, onSelect])
+  }, [area, listings, groups, expandedGroup, onGroup, selectedId, onSelect])
   return (
     <>
       <div
@@ -244,6 +285,7 @@ export default function AreaMap() {
   const [showUnavailable, setShowUnavailable] = useState(false)
   const [results, setResults] = useState<AreaResults | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [queryError, setQueryError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -285,6 +327,12 @@ export default function AreaMap() {
     }
   }, [area, showUnavailable, revision])
   const listings = results?.listings ?? []
+  const groups = results?.municipalityGroups ?? []
+  const groupedIds = new Set(groups.flatMap((group) => group.listingIds))
+  const selectGroup = useCallback((id: string) => {
+    setExpandedGroup(id)
+    document.getElementById(`municipality-${id}`)?.focus()
+  }, [])
   const selected = listings.find((listing) => listing.id === selectedId)
   return (
     <section
@@ -361,6 +409,9 @@ export default function AreaMap() {
           <MapCanvas
             area={area}
             listings={listings}
+            groups={groups}
+            expandedGroup={expandedGroup}
+            onGroup={selectGroup}
             selectedId={selectedId}
             onSelect={setSelectedId}
             onArea={selectArea}
@@ -381,7 +432,11 @@ export default function AreaMap() {
           )}
           <ul className="listing-results" aria-label="Listing results">
             {listings
-              .filter((listing) => listing.location.kind !== 'unknown')
+              .filter(
+                (listing) =>
+                  !groupedIds.has(listing.id) &&
+                  listing.location.kind !== 'unknown',
+              )
               .map((listing) => (
                 <ListingRow
                   key={listing.id}
@@ -391,6 +446,73 @@ export default function AreaMap() {
                   onSelect={setSelectedId}
                 />
               ))}
+            {groups.map((group) => (
+              <li key={group.municipalityId}>
+                <div
+                  role="group"
+                  aria-label={`Municipality summary: ${municipalityTitle(group.municipalityId)}`}
+                >
+                  <p>
+                    Municipality summary · Exact listing locations and distances
+                    are unknown. The point represents the municipality, not an
+                    individual listing.
+                  </p>
+                  {!group.representativePoint && (
+                    <p>
+                      No documented representative point; listings remain
+                      available here without a map marker.
+                    </p>
+                  )}
+                  {group.representativePointProvenance && (
+                    <p>
+                      Representative point provenance:{' '}
+                      {group.representativePointProvenance}
+                    </p>
+                  )}
+                  <details open={expandedGroup === group.municipalityId}>
+                    <summary
+                      id={`municipality-${group.municipalityId}`}
+                      onClick={(event) => {
+                        event.preventDefault()
+                        setExpandedGroup(
+                          expandedGroup === group.municipalityId
+                            ? null
+                            : group.municipalityId,
+                        )
+                      }}
+                    >
+                      {municipalityTitle(group.municipalityId)} · {group.count}{' '}
+                      {group.count === 1 ? 'listing' : 'listings'}
+                    </summary>
+                    <details>
+                      <summary>Original Japanese municipality name</summary>
+                      <p lang="ja">{group.nameJa}</p>
+                    </details>
+                    <ul
+                      aria-label={`Offers in ${municipalityTitle(group.municipalityId)}`}
+                    >
+                      {group.listingIds
+                        .map((id) =>
+                          listings.find((listing) => listing.id === id),
+                        )
+                        .filter((listing): listing is ListingProjection =>
+                          Boolean(listing),
+                        )
+                        .map((listing) => (
+                          <li key={listing.id}>
+                            <button
+                              aria-pressed={selectedId === listing.id}
+                              onClick={() => setSelectedId(listing.id)}
+                            >
+                              {listingTitle(listing)}
+                            </button>
+                          </li>
+                        ))}
+                    </ul>
+                  </details>
+                </div>
+              </li>
+            ))}
           </ul>
           <h3>Unknown location</h3>
           <ul className="listing-results" aria-label="Unknown location">
