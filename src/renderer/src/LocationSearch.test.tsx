@@ -29,7 +29,13 @@ function setup(
     mode: 'synthetic',
     listings: [],
     municipalityGroups: [],
-    coverage: { status: 'unknown' },
+    coverage: {
+      status: 'unknown',
+      lastSuccessfulCheckAt: null,
+      freshUntil: null,
+      scopeKey: null,
+      caveats: [],
+    },
     generatedAt: '',
   }))
   const createImportRequest = vi.fn()

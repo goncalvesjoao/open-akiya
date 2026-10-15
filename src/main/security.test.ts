@@ -27,6 +27,12 @@ it('registered handlers reject foreign contents, child frames and changed applic
     await expect(handler(event, {})).resolves.toMatchObject({
       error: { code: 'UNTRUSTED_SENDER' },
     })
+  await expect(
+    handlers.get('akiya:cancelImportRequest')!(
+      { sender: {}, senderFrame: frame },
+      'request-1',
+    ),
+  ).resolves.toMatchObject({ error: { code: 'UNTRUSTED_SENDER' } })
   frame.url = 'file:///app/index.html?foreign=1'
   await expect(
     handler({ sender: contents, senderFrame: frame }, {}),
@@ -42,6 +48,7 @@ it('registered handlers reject foreign contents, child frames and changed applic
   expect([...handlers.keys()].sort()).toEqual([
     'akiya:areaResults',
     'akiya:cancelImport',
+    'akiya:cancelImportRequest',
     'akiya:createImportRequest',
     'akiya:inspectImport',
     'akiya:inspectImportRequest',

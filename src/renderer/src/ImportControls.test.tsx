@@ -70,6 +70,7 @@ function setup(overrides: Partial<DesktopAPI> = {}) {
     })),
     inspectImportRequest: vi.fn(),
     inspectImport: vi.fn(async () => job),
+    cancelImportRequest: vi.fn(),
     cancelImport: vi.fn(async (): Promise<Job> => ({
       ...job,
       state: 'cancelled',
