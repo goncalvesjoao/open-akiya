@@ -1,0 +1,35 @@
+
+ RUN  v5.0.4 /tmp/open-akiya-fix13
+
+ ❯ src/main/runtime.test.ts (10 tests | 2 failed | 8 skipped) 2019ms
+   × rejects zero floorAreaM2 without saving the observation or listing 1015ms
+   × rejects zero landAreaM2 without saving the observation or listing 1003ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/main/runtime.test.ts > rejects zero floorAreaM2 without saving the observation or listing
+ FAIL  src/main/runtime.test.ts > rejects zero landAreaM2 without saving the observation or listing
+AssertionError: expected 'succeeded' to be 'failed' // Object.is equality
+
+Expected: "failed"
+Received: "succeeded"
+
+ ❯ src/main/runtime.test.ts:332:8
+    330|     await expect
+    331|       .poll(() => runtime.inspect(rejected.jobIds[0]).state)
+    332|       .toBe('failed')
+       |        ^
+    333|     expect(runtime.inspect(rejected.jobIds[0])).toMatchObject({
+    334|       counts: { checked: 0, added: 0, updated: 0, unchanged: 0 },
+
+Caused by: Error: Matcher did not succeed in time.
+ ❯ src/main/runtime.test.ts:330:5
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 8 skipped (10)
+   Start at  23:31:49
+   Duration  2.44s (tests 88%, transform 6%, setup 5%, import 1%)
+

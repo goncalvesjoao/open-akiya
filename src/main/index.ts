@@ -10,6 +10,8 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { mkdirSync } from 'node:fs'
 import type { Operation, WorkerReply } from '../shared/desktop'
+import { LocalApiError } from './errors'
+import { registerDomainHandlers } from './security'
 import { safeSourceUrl } from '../shared/geography'
 
 app.setName('Open Akiya')
@@ -61,7 +63,10 @@ function startWorker() {
     if (!request) return
     clearTimeout(request.timer)
     pending.delete(reply.id)
-    if (reply.error) request.reject(new Error(reply.error))
+    if (reply.error)
+      request.reject(
+        new LocalApiError(500, reply.error.code, reply.error.message),
+      )
     else request.resolve(reply.result)
   })
   worker.on('exit', () => {
@@ -137,25 +142,12 @@ else {
     mkdirSync(app.getPath('userData'), { recursive: true })
     app.userAgentFallback = `OpenAkiya/${app.getVersion()} (+https://github.com/goncalvesjoao/open-akiya)`
     startWorker()
-    const operations: Operation[] = [
-      'createImport',
-      'inspectImport',
-      'cancelImport',
-      'listImports',
-      'areaResults',
-    ]
-    for (const operation of operations) {
-      ipcMain.handle(`akiya:${operation}`, (event, input: unknown) => {
-        if (
-          !window ||
-          event.sender !== window.webContents ||
-          event.senderFrame !== window.webContents.mainFrame ||
-          event.senderFrame.url !== rendererURL
-        )
-          throw new Error('Untrusted sender')
-        return call(operation, input)
-      })
-    }
+    registerDomainHandlers(
+      ipcMain,
+      () => window?.webContents ?? null,
+      rendererURL,
+      call,
+    )
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
         {

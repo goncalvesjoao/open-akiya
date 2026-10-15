@@ -12,5 +12,11 @@ const sampleTitles: Record<string, string> = {
 }
 
 export function listingTitle(listing: ListingProjection): string {
-  return sampleTitles[listing.id] ?? 'Listing from original source'
+  const source = listing.sourceRefs.find(
+    (source) => source.sourceId === 'fixture',
+  )
+  return (
+    sampleTitles[source ? `sample-${source.externalId}` : listing.id] ??
+    'Listing from original source'
+  )
 }

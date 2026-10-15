@@ -1,0 +1,62 @@
+
+ RUN  v5.0.4 /home/goncalvesjoao/Projects/open-akiya
+
+ ❯ src/main/runtime.test.ts (11 tests | 1 failed | 10 skipped) 39ms
+   × idle workers avoid write transactions and retained terminal payloads, but wake for local and external requests 37ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/main/runtime.test.ts > idle workers avoid write transactions and retained terminal payloads, but wake for local and external requests
+AssertionError: expected [ [ 'BEGIN IMMEDIATE' ] ] to have a length of +0 but got 1
+
+- Expected
++ Received
+
+- 0
++ 1
+
+ ❯ src/main/runtime.test.ts:367:74
+    365|   try {
+    366|     await vi.advanceTimersByTimeAsync(10000)
+    367|     expect(exec.mock.calls.filter(([sql]) => sql === 'BEGIN IMMEDIATE'…
+       |                                                                          ^
+    368|     expect(prepare.mock.calls.length).toBeLessThanOrEqual(12)
+    369|     expect(runtime.list({ state: 'active' }).jobs).toEqual([])
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+⎯⎯⎯⎯⎯⎯ Unhandled Errors ⎯⎯⎯⎯⎯⎯
+
+Vitest caught 1 unhandled error during the test run.
+This might cause false positive tests. Resolve unhandled errors to make sure your tests are not affected.
+
+⎯⎯⎯⎯ Unhandled Rejection ⎯⎯⎯⎯⎯
+SyntaxError: Unexpected token 'o', "not active JSON" is not valid JSON
+ ❯ src/main/runtime.ts:100:26
+     98|       .prepare('SELECT data FROM import_jobs_v2 ORDER BY rowid')
+     99|       .all()
+    100|       .map((row) => JSON.parse(String(row.data)))
+       |                          ^
+    101|   }
+    102|   list(input: unknown): { jobs: ImportJob[] } {
+ ❯ ImportRuntime.allJobs src/main/runtime.ts:100:8
+ ❯ src/main/runtime.ts:329:24
+ ❯ ImportRuntime.transaction src/main/runtime.ts:88:21
+ ❯ ImportRuntime.claim src/main/runtime.ts:319:17
+ ❯ ImportRuntime.run src/main/runtime.ts:515:22
+ ❯ src/main/runtime.ts:315:17
+ ❯ callTimer node_modules/vitest/dist/chunks/index.uwTEEBsB.js:5167:25
+
+This error originated in "src/main/runtime.test.ts" test file. It doesn't mean the error was thrown inside the file itself, but while it was running.
+The last test to run before this error was "idle workers avoid write transactions and retained terminal payloads, but wake for local and external requests". This means either:
+- the error was thrown while Vitest was running this test, or
+- the error was thrown after the test completed, and this was the most recent test at that point.
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 10 skipped (11)
+     Errors  1 error
+   Start at  23:49:11
+   Duration  364ms (setup 44%, transform 30%, tests 17%, import 8%, worker 2%)
+
