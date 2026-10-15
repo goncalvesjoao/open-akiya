@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ImportRuntime } from './runtime'
+import { testClock } from './test-clock'
 import { syntheticAdapter, type SourceAdapter } from './adapter'
 import { fixtures } from './fixtures'
 import { initialArea } from '../shared/geography'
@@ -80,8 +81,13 @@ test('proven duplicate sources share one attributed projection with independent 
   const state = { phase: 0 }
   let clock = Date.parse('2026-10-16T00:00:00Z')
   const runtime = new ImportRuntime(join(directory, 'duplicate.sqlite'), 1, {
+    ...testClock(),
     adapters: adapters(state),
     now: () => clock,
+    wait: async (milliseconds, signal) => {
+      signal.throwIfAborted()
+      clock += milliseconds
+    },
   })
   runtimes.push(runtime)
   expect(await imported(runtime)).toMatchObject({
@@ -95,7 +101,7 @@ test('proven duplicate sources share one attributed projection with independent 
     primarySourceUrl: 'https://example.invalid/fixture',
     sourceRefs: [{ sourceId: 'fixture' }, { sourceId: 'secondary' }],
     availability: 'available',
-    sourceCheckedAt: '2026-10-16T00:00:00.000Z',
+    sourceCheckedAt: '2026-10-16T00:00:02.000Z',
   })
   state.phase = 1
   clock += 86400000
@@ -111,7 +117,7 @@ test('proven duplicate sources share one attributed projection with independent 
   state.phase = 2
   clock += 86400000
   expect(await imported(runtime)).toMatchObject({
-    state: 'partial',
+    state: 'failed',
     counts: { rejected: 2 },
   })
   expect(runtime.results(query).listings[0]).toEqual(supported)
@@ -131,7 +137,10 @@ test('proven duplicate sources share one attributed projection with independent 
 test('duplicate history remains private and failed imports append no successful evidence', async () => {
   const state = { phase: 0 }
   const path = join(directory, 'history.sqlite')
-  const runtime = new ImportRuntime(path, 1, { adapters: adapters(state) })
+  const runtime = new ImportRuntime(path, 1, {
+    ...testClock(),
+    adapters: adapters(state),
+  })
   runtimes.push(runtime)
   await imported(runtime)
   const db = new DatabaseSync(path)
@@ -202,7 +211,7 @@ test.each([
     const runtime = new ImportRuntime(
       join(directory, `invalid-${++key}.sqlite`),
       1,
-      { adapters: sources },
+      { ...testClock(), adapters: sources },
     )
     runtimes.push(runtime)
     expect(await imported(runtime)).toMatchObject({
@@ -231,8 +240,8 @@ test('supporting source time stays conservative and proven links survive omitted
   }
   const path = join(directory, 'restart.sqlite')
   let runtime = new ImportRuntime(path, 1, {
+    ...testClock(Date.parse('2026-10-16T00:00:00Z')),
     adapters: sources,
-    now: () => Date.parse('2026-10-16T00:00:00Z'),
   })
   await imported(runtime)
   expect(runtime.results(query).listings[0].sourceCheckedAt).toBe(
@@ -241,15 +250,15 @@ test('supporting source time stays conservative and proven links survive omitted
   await runtime.close()
   claim = false
   runtime = new ImportRuntime(path, 1, {
+    ...testClock(Date.parse('2026-10-17T00:00:00Z')),
     adapters: sources,
-    now: () => Date.parse('2026-10-17T00:00:00Z'),
   })
   runtimes.push(runtime)
   await imported(runtime)
   expect(runtime.results(query).listings).toHaveLength(1)
   expect(runtime.results(query).listings[0]).toMatchObject({
     sourceCheckedAt: '2026-10-15T00:00:00Z',
-    firstSeenAt: '2026-10-16T00:00:00.000Z',
+    firstSeenAt: '2026-10-16T00:00:02.000Z',
     primarySourceUrl: 'https://example.invalid/fixture',
   })
 })
@@ -289,6 +298,7 @@ test('matching appearance without proof and a claimed sale/rental match stay sep
     },
   })
   const runtime = new ImportRuntime(join(directory, 'separate.sqlite'), 1, {
+    ...testClock(),
     adapters: sources,
   })
   runtimes.push(runtime)
@@ -325,20 +335,29 @@ test('a secondary successful check cannot freshen retained primary facts after p
   const runtime = new ImportRuntime(
     join(directory, 'primary-failure.sqlite'),
     1,
-    { adapters: sources, now: () => clock },
+    {
+      ...testClock(),
+      adapters: sources,
+      now: () => clock,
+      wait: async (milliseconds, signal) => {
+        signal.throwIfAborted()
+        clock += milliseconds
+      },
+    },
   )
   runtimes.push(runtime)
   await imported(runtime)
   state.phase = 1
   await imported(runtime)
+  const checked = runtime.results(query).listings[0].sourceCheckedAt
   fail = true
   clock += 86400000
   await imported(runtime)
   expect(runtime.results(query).listings[0]).toMatchObject({
     availability: 'available',
     titleJa: fixtures[0].titleJa,
-    sourceCheckedAt: '2026-10-16T00:00:00.000Z',
-    lastSeenAt: '2026-10-16T00:00:00.000Z',
+    sourceCheckedAt: checked,
+    lastSeenAt: checked,
   })
 })
 
@@ -368,6 +387,7 @@ test('an established duplicate cannot be relinked to another saved offer', async
     ]),
   )
   const runtime = new ImportRuntime(join(directory, 'relink.sqlite'), 1, {
+    ...testClock(),
     adapters: sources,
   })
   runtimes.push(runtime)
