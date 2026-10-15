@@ -290,6 +290,7 @@ export default function AreaMap() {
   const [queryError, setQueryError] = useState('')
   const [loading, setLoading] = useState(true)
   const [revision, setRevision] = useState(0)
+  const queryStatus = useRef<HTMLParagraphElement>(null)
   function selectArea(next: SelectedArea) {
     setLoading(true)
     setQueryError('')
@@ -326,8 +327,16 @@ export default function AreaMap() {
       active = false
     }
   }, [area, showUnavailable, revision])
-  const listings = results?.listings ?? []
-  const groups = results?.municipalityGroups ?? []
+  const matchingResults =
+    results &&
+    results.area.center.latitude === area.center.latitude &&
+    results.area.center.longitude === area.center.longitude &&
+    results.area.radiusKm === area.radiusKm &&
+    results.showUnavailable === showUnavailable
+      ? results
+      : null
+  const listings = matchingResults?.listings ?? []
+  const groups = matchingResults?.municipalityGroups ?? []
   const groupedIds = new Set(groups.flatMap((group) => group.listingIds))
   const selectGroup = useCallback((id: string) => {
     setExpandedGroup(id)
@@ -402,7 +411,11 @@ export default function AreaMap() {
       </label>
       <ImportControls
         area={area}
-        onSettled={() => setRevision((value) => value + 1)}
+        onSettled={() => {
+          setLoading(true)
+          setQueryError('')
+          setRevision((value) => value + 1)
+        }}
       />
       <div className="map-layout">
         <div>
@@ -418,17 +431,48 @@ export default function AreaMap() {
           />
         </div>
         <div>
-          <p role="status">
+          <p role="status" ref={queryStatus} tabIndex={-1}>
             {loading
               ? 'Loading listings…'
               : queryError ||
-                `${listings.length} synthetic listings. Coverage unknown; no real inventory.`}
+                `${listings.length} synthetic listings. No real inventory.`}
           </p>
+          {queryError && (
+            <button
+              onClick={() => {
+                setLoading(true)
+                setQueryError('')
+                queryStatus.current?.focus()
+                setRevision((value) => value + 1)
+              }}
+            >
+              Retry listing query
+            </button>
+          )}
+          {!matchingResults && results && (
+            <p>
+              Previous results belong to a different area or filter and are
+              hidden. Last successful data is retained; a failed query does not
+              establish withdrawal.
+            </p>
+          )}
           {!loading && !queryError && listings.length === 0 && (
             <p>
               No listings in this selected area. This does not prove withdrawal
               or complete coverage.
             </p>
+          )}
+          {matchingResults && (
+            <div>
+              <p>
+                Coverage {matchingResults.coverage.status}; configured sources
+                only, never complete inventory. Last successful covering check:{' '}
+                {matchingResults.coverage.lastSuccessfulCheckAt ?? 'Unknown'}.
+              </p>
+              {matchingResults.coverage.caveats.map((caveat, index) => (
+                <p key={index}>{caveat}</p>
+              ))}
+            </div>
           )}
           <ul className="listing-results" aria-label="Listing results">
             {listings
