@@ -1,16 +1,11 @@
 # Database
 
-The first migration creates `public.listings`, with Japanese originals, optional English translations, source attribution, location, yen prices, publication state, and timestamps. Null prices mean unknown, not free. Coordinates may be omitted together.
+Supabase CLI owns schema migration execution and the `supabase_migrations.schema_migrations` history. The CLI is pinned in the npm development dependencies, and the local configuration is committed in `config.toml`.
 
-Row-level security permits browser clients to read only published listings. No browser write policies are provided. Ingestion and moderation should run in trusted backend code; never expose a Supabase secret or service-role key in the frontend.
+For local development, install Node.js and Docker, run `npm install`, then `npx supabase start`. Configure the server-only `DATABASE_URL` and installation session token as described in [local runtime setup](../docs/local-import-runtime.md). `npm run dev:local` applies pending migrations through the CLI and starts the application processes. `npm run db:migrate` applies only pending migrations to that configured database. These commands use an explicit database URL; they do not link or push to a hosted project.
 
-To use a hosted Supabase project:
+The first migration creates `public.listings`, preserving Japanese originals, source attribution, yen prices and editorial publication state. Null prices mean unknown, not free. The runtime migration adds normalized listing fields and private jobs, requests, observations and projections.
 
-1. Create a project in Supabase.
-2. Run `migrations/20261015000000_create_listings.sql` in its SQL Editor once. Alternatively, install the Supabase CLI, run `supabase init`, `supabase login`, `supabase link --project-ref YOUR_PROJECT_REF`, then `supabase db push` from the repository root.
-3. Copy the project URL and publishable API key into the root `.env.local` file, using `.env.example` as a template.
-4. Restart the Vite development server after changing environment variables.
+Row-level security permits browser clients to read only published listings. Imported draft offers are available through the approved local API projection. Private operational tables and source evidence are inaccessible to browser roles, and browser writes are not granted. Privileged database credentials remain server-side.
 
-The landing page does not query the database yet. There are no real listings, ingestion jobs, or translation services included in this foundation.
-
-For local Supabase development, install the Supabase CLI and Docker, run `supabase init`, `supabase start`, then `supabase db reset`. Use the local API URL and public key printed by the CLI. `db reset` recreates the local database and applies the migrations.
+Existing databases created by the earlier application migration runner need the [verified-history transition](../docs/local-import-runtime.md#transition-from-the-earlier-application-migration-runner) before startup. Do not reset retained data to reconcile migration history. The same document explains isolated database tests and backup considerations.

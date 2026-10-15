@@ -17,7 +17,7 @@ npm install
 npm run dev
 ```
 
-For the persistent synthetic import API and worker, follow [local runtime setup](docs/local-import-runtime.md), then run `npm run dev:local`. This starts the frontend, API and independent worker after migrations.
+For the persistent synthetic import API and worker, follow [local runtime setup](docs/local-import-runtime.md), then run `npm run dev:local`. This applies migrations through the pinned Supabase CLI, then starts the frontend, API and independent worker. No global CLI installation or `supabase init` is needed.
 
 Open the local URL printed by Vite. The landing page runs without Supabase credentials.
 

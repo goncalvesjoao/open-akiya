@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -34,6 +35,43 @@ try {
   await run(['--import', 'tsx', 'scripts/migrate.ts'])
   const testPool = new pg.Pool({ connectionString: url.href })
   try {
+    const history = await testPool.query(
+      "select to_regclass('supabase_migrations.schema_migrations') as official, to_regclass('public.local_import_migrations') as legacy",
+    )
+    assert.ok(
+      history.rows[0].official,
+      'Supabase CLI must own migration history',
+    )
+    assert.equal(
+      history.rows[0].legacy,
+      null,
+      'Fresh databases must not create a custom migration ledger',
+    )
+    const saved = await testPool.query(
+      "insert into public.listings(source_url,source_name,title_ja,prefecture,price_jpy,status) values('https://example.invalid/migration-preserved','Fixture','保持する元情報','京都府',0,'draft') returning id",
+    )
+    await run(['--import', 'tsx', 'scripts/migrate.ts'])
+    const retained = await testPool.query(
+      'select title_ja,price_jpy,status,source_checked_at from public.listings where id=$1',
+      [saved.rows[0].id],
+    )
+    assert.deepEqual(
+      retained.rows,
+      [
+        {
+          title_ja: '保持する元情報',
+          price_jpy: '0',
+          status: 'draft',
+          source_checked_at: null,
+        },
+      ],
+      'Repeating CLI migrations must preserve existing listing data',
+    )
+    const versions = await testPool.query(
+      'select version from supabase_migrations.schema_migrations',
+    )
+    assert.ok(versions.rows.some((row) => row.version === '20261015000000'))
+    assert.ok(versions.rows.some((row) => row.version === '20261015010000'))
     const { readFile } = await import('node:fs/promises')
     await testPool.query(
       await readFile(

@@ -2,19 +2,22 @@
 
 This milestone runs a local API and independent worker backed by your installation's Postgres. It imports clearly labelled synthetic fixtures, never live akiya banks. The map remains independently usable; browser import controls, cache reuse and continuation are later milestones.
 
-Install Node.js 22.12+ and npm, Docker, and the Supabase CLI. Start Docker and run `supabase init` once if your checkout does not yet have `supabase/config.toml`, then `supabase start`. Docker must be available to your account. Supabase prints its local Postgres connection URL. No hosted project is required.
+Install Node.js 22.12+, npm and Docker. `npm install` includes the pinned Supabase CLI; the repository already contains `supabase/config.toml`. Docker must be available to your account for the local Supabase stack. No hosted project or CLI login is required.
 
 ```sh
 npm install
+npx supabase start
 cp .env.example .env.local
 ```
 
 Set these server-only entries in `.env.local` using the local database URL printed by Supabase:
 
 ```dotenv
-DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable
 INSTALLATION_SESSION_TOKEN=replace-with-a-random-secret-of-at-least-32-characters
 ```
+
+Supabase prints its local database URL. Append `?sslmode=disable` for this local, unencrypted database; keep TLS enabled for database connections that require it. A standalone local Postgres with the Supabase roles can also run the migrations and tests without Docker; Docker is needed to start the full Supabase stack.
 
 Generate a token with `openssl rand -hex 32`. Keep it in your local environment file. Never prefix the database URL or session token with `VITE_`, commit them, or place them in browser bundles. The runtime uses a privileged database connection to private operational tables; browsers cannot read those tables directly.
 
@@ -22,7 +25,7 @@ Generate a token with `openssl rand -hex 32`. Keep it in your local environment 
 npm run dev:local
 ```
 
-This command applies pending migrations, then starts Vite, the loopback API and a separate worker process. The worker continues when a browser tab closes. Stopping this command stops the processes; saved queued jobs and committed offers remain in Postgres. Restarting processes preserves the idempotency mapping. Recovery of an interrupted running job is implemented by ticket #18. One installation executes one import at a time.
+This command invokes the pinned Supabase CLI (`supabase migration up --db-url DATABASE_URL`) to apply pending migrations, then starts Vite, the loopback API and a separate worker process. The worker continues when a browser tab closes. Stopping this command stops the processes; saved queued jobs and committed offers remain in Postgres. Restarting processes preserves the idempotency mapping. Recovery of an interrupted running job is implemented by ticket #18. One installation executes one import at a time.
 
 The API listens on `127.0.0.1:8787`. Allowed browser origins are `http://localhost:5173` and `http://127.0.0.1:5173`. Mutation calls require an allowed Origin, the installation token, JSON content type and, for create, an idempotency key. Repeating the same key and semantic input returns the saved request; reusing it with different input is a conflict.
 
@@ -49,8 +52,38 @@ The API sends approved listing fields and sanitized errors only. Raw observation
 
 ## Verification and recovery
 
-Run `npm test`, `npm run build`, `npm run lint` and `npm run format:check`. `TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres npm run test:server` creates a uniquely named throwaway database, migrates it, checks database-role security and runs the HTTP API/worker suite, then drops only that database. The connection must allow database creation, and the cluster must contain Supabase roles `anon` and `authenticated`. For a standalone development Postgres cluster, create these roles without login first. The supplied database itself is not truncated. No automated checks need live bank access.
+Run `npm test`, `npm run build`, `npm run lint` and `npm run format:check`. `TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:54322/postgres?sslmode=disable npm run test:server` creates a uniquely named throwaway database, applies the same Supabase CLI migrations twice, verifies official history and preservation of saved listing data, checks database-role security and runs the HTTP API/worker suite, then drops only that database. The connection must allow database creation, and the cluster must contain Supabase roles `anon` and `authenticated`. For a standalone development Postgres cluster, create these roles without login first. The supplied database itself is not truncated. No automated checks need live bank access.
 
-Migration records are transactional. `npm run dev:local` also recognizes versions already applied by Supabase's migration ledger. Back up your database before deleting Docker volumes or running `supabase db reset`: those operations erase retained jobs and offers. A missing source configuration is an explicit configuration failure rather than a successful empty search. Fixture mode is intended for deterministic development and does not claim live-source permission or production coverage.
+Supabase CLI exclusively executes migrations and records their history in `supabase_migrations.schema_migrations`; startup, `npm run db:migrate` and the test harness all use the same CLI launcher. There is no application migration ledger. A repeat run leaves already applied migrations and saved data unchanged. Back up your database before deleting Docker volumes or running `supabase db reset`: those operations erase retained jobs and offers. A missing source configuration is an explicit configuration failure rather than a successful empty search. Fixture mode is intended for deterministic development and does not claim live-source permission or production coverage.
 
 The process startup smoke was verified on 2026-10-15 using a separate PostgreSQL 18.6 database and `DATABASE_URL=… INSTALLATION_SESSION_TOKEN=… node --import tsx scripts/start.ts`. The API, worker and Vite ran as separate children; the documented create/poll/results sequence returned HTTP 202, then `succeeded` with `discovered:1`, `checked:1`, `added:1`, and one saved listing. Stopping the launcher terminated its children. The repeatable API, exclusivity and security evidence lives in `server/runtime.test.ts` and `supabase/tests/import_runtime.sql`; the throwaway-database command above runs both.
+
+## Transition from the earlier application migration runner
+
+An existing database may have both schema migrations applied but only `public.local_import_migrations` recording them. Do this reconciliation before starting the new launcher. Retain a database backup and inspect a restored copy first; resetting the database would erase jobs and offers.
+
+Use the same privileged local database URL as the application. Inspect whether each history table exists, then read any existing entries:
+
+```sh
+psql "$DATABASE_URL" -c "select to_regclass('public.local_import_migrations'), to_regclass('supabase_migrations.schema_migrations');"
+# Run only if the corresponding table exists:
+psql "$DATABASE_URL" -c 'select name from public.local_import_migrations order by name;'
+npx supabase migration list --db-url "$DATABASE_URL"
+```
+
+History entries alone do not prove that a schema is intact. Compare the actual tables, constraints, triggers, functions, grants, RLS settings and policies against each SQL file in `supabase/migrations/`. Check existing listing IDs, Japanese fields, editorial status and saved operational records before and after reconciliation. If an object is missing or differs, investigate and repair that discrepancy before marking its migration applied. Never mark a missing migration as applied merely to bypass a CLI error.
+
+Only for a migration whose complete SQL effects you have verified, and which is absent from the Supabase history, record that exact version using the CLI. Run each command only when its own condition holds:
+
+```sh
+# After verifying every effect of 20261015000000_create_listings.sql:
+npx supabase migration repair --db-url "$DATABASE_URL" --status applied 20261015000000
+# After verifying every effect of 20261015010000_create_import_runtime.sql:
+npx supabase migration repair --db-url "$DATABASE_URL" --status applied 20261015010000
+```
+
+For example, a database with only the verified first migration needs only the first repair; the CLI then applies the second migration normally. A database already tracked correctly by Supabase needs no repair. After reconciliation, run `npm run db:migrate` and inspect the official history and saved records again. The old application history table is inert and is not consulted or modified; retain it for audit or remove that table manually after the transition is verified and backed up. Do not remove the listing or import tables.
+
+The transition was checked on a copy of the earlier runner's database on 2026-10-15: both verified versions were repaired, the next CLI migration run applied nothing, and all existing listing, request, job, source-task, observation and projection records remained identical. This is evidence for that inspected fixture database, not permission to mark migrations applied in an uninspected installation.
+
+The pinned CLI migration path was also verified against standalone PostgreSQL 18.6 without Docker: fresh migrations populated only the Supabase history, repeating them preserved saved listing data, and the API/worker/frontend startup smoke still produced a succeeded one-listing import. The pinned CLI also completed a repeated migration run under the documented minimum Node.js 22.12.0.

@@ -42,6 +42,7 @@
     "globals": "^16.0.0",
     "jsdom": "^30.1.2",
     "prettier": "^3.6.2",
+    "supabase": "2.121.0",
     "tsx": "^4.23.15",
     "typescript": "~5.9.0",
     "typescript-eslint": "^8.0.0",

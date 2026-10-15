@@ -1,0 +1,24 @@
+# Supabase CLI local defaults, shared by development and isolated database checks.
+# Other services use the CLI defaults; this application does not require linked hosting.
+project_id = "open-akiya"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.migrations]
+enabled = true
+schema_paths = []
+
+# Synthetic offers come from the worker, not a seed file.
+[db.seed]
+enabled = false
+sql_paths = []
