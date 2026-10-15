@@ -2,6 +2,8 @@ import type { ListingProjection } from '../../../shared/listings'
 
 // Authored English labels for fictional fixtures, not source translations.
 const sampleTitles: Record<string, string> = {
+  'sample-precise-outside-1':
+    'Precise-location sample listing outside the discovery area',
   'sample-location-unknown-1': 'Unknown-location sample listing',
   'sample-location-unknown-unavailable-1':
     'Unavailable unknown-location sample listing',
