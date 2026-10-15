@@ -379,12 +379,10 @@ test('an established duplicate cannot be relinked to another saved offer', async
     counts: { rejected: 1, added: 0 },
   })
   expect(
-    runtime
-      .results(query)
-      .listings.map((listing) => ({
-        id: listing.id,
-        sourceRefs: listing.sourceRefs,
-      })),
+    runtime.results(query).listings.map((listing) => ({
+      id: listing.id,
+      sourceRefs: listing.sourceRefs,
+    })),
   ).toEqual(
     before.map((listing) => ({
       id: listing.id,
