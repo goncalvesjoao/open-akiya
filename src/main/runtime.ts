@@ -57,6 +57,7 @@ type Progress = {
   }[]
   deferredRefresh?: NonNullable<Progress['refresh']>
   refreshSaved?: Record<number, number>
+  savedBySource?: Record<number, number>
   refreshIndex?: number
   detailClassUsed?: { new: number; refresh: number }
   nextDetailClass?: 'new' | 'refresh'
@@ -851,6 +852,25 @@ export class ImportRuntime {
     else job.counts.updated++
   }
   private prepareRefresh(job: ImportJob, progress: Progress) {
+    if (!progress.savedBySource) {
+      // Recover older jobs from their retained source successes before counting
+      // new commits across both detail classes.
+      progress.savedBySource = { ...progress.refreshSaved }
+      for (const row of this.db
+        .prepare('SELECT data FROM source_traversals WHERE job_id=?')
+        .all(job.id)) {
+        const saved: Progress = JSON.parse(String(row.data))
+        progress.savedBySource[saved.sourceIndex] = Math.max(
+          progress.savedBySource[saved.sourceIndex] ?? 0,
+          saved.sourceSaved ?? 0,
+        )
+      }
+      if (progress.sourceIndex < this.adapters.length)
+        progress.savedBySource[progress.sourceIndex] = Math.max(
+          progress.savedBySource[progress.sourceIndex] ?? 0,
+          progress.sourceSaved ?? 0,
+        )
+    }
     progress.detailClassUsed ??= { new: 0, refresh: 0 }
     progress.refreshReservation ??= this.refreshReservation
     progress.refreshIndex ??= 0
@@ -901,7 +921,8 @@ export class ImportRuntime {
       )
       .sort(
         (a, b) =>
-          (a.checkedAt ?? '').localeCompare(b.checkedAt ?? '') ||
+          (a.checkedAt === null ? -Infinity : Date.parse(a.checkedAt)) -
+            (b.checkedAt === null ? -Infinity : Date.parse(b.checkedAt)) ||
           a.sourceIndex - b.sourceIndex ||
           a.candidate.externalId.localeCompare(b.candidate.externalId),
       )
@@ -947,11 +968,8 @@ export class ImportRuntime {
           this.commit(job, normalized.observation, adapter, candidate)
           if (sourceIndex === progress.sourceIndex)
             progress.sourceSaved = (progress.sourceSaved ?? 0) + 1
-          if (detailClass === 'refresh') {
-            progress.refreshSaved ??= {}
-            progress.refreshSaved[sourceIndex] =
-              (progress.refreshSaved[sourceIndex] ?? 0) + 1
-          }
+          progress.savedBySource![sourceIndex] =
+            (progress.savedBySource![sourceIndex] ?? 0) + 1
         } catch (error) {
           if (
             !(error instanceof LocalApiError) ||
@@ -1167,7 +1185,7 @@ export class ImportRuntime {
         const source = job.sources[progress.sourceIndex]
         progress.sourceSaved = Math.max(
           progress.sourceSaved ?? 0,
-          progress.refreshSaved?.[progress.sourceIndex] ?? 0,
+          progress.savedBySource?.[progress.sourceIndex] ?? 0,
         )
         source.state = 'running'
         const context = this.context(job, adapter, progress)
@@ -1362,7 +1380,7 @@ export class ImportRuntime {
           source.state !== 'failed' ||
           !source.error ||
           source.error.code === 'BUDGET_EXHAUSTED' ||
-          (progress.refreshSaved?.[task.sourceIndex] ?? 0) > 0
+          (progress.savedBySource?.[task.sourceIndex] ?? 0) > 0
         )
           source.state = 'partial'
         source.coverage = 'partial'
@@ -1375,9 +1393,11 @@ export class ImportRuntime {
           job.reasons.push(source.error.code)
       }
       for (const [sourceIndex, source] of job.sources.entries()) {
+        if (source.error && !job.reasons.includes(source.error.code))
+          job.reasons.push(source.error.code)
         if (source.error && source.state === 'succeeded') {
           source.state =
-            (progress.refreshSaved?.[sourceIndex] ?? 0) > 0
+            (progress.savedBySource?.[sourceIndex] ?? 0) > 0
               ? 'partial'
               : 'failed'
           source.coverage = 'partial'
@@ -1391,6 +1411,7 @@ export class ImportRuntime {
           'refresh',
           'refreshIndex',
           'refreshSaved',
+          'savedBySource',
           'deferredRefresh',
           'detailClassUsed',
           'nextDetailClass',

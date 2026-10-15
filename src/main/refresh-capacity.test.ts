@@ -649,3 +649,138 @@ test('unsupported geography cannot bypass the source gate through saved refresh 
     counts: { checked: 0 },
   })
 })
+
+test('a source that saves a new offer stays partial when its released refresh is rejected', async () => {
+  const path = join(directory, 'new-then-rejected-refresh.sqlite')
+  const clock = testClock(0)
+  let refreshing = false
+  const sources = ['first', 'second'].map((sourceId) => {
+    const offer = (externalId: string) => {
+      const url = `https://example.invalid/${sourceId}/${externalId}`
+      return {
+        ...fixtures[0],
+        primarySourceUrl: url,
+        sourceRefs: [
+          { ...fixtures[0].sourceRefs[0], sourceId, externalId, url },
+        ],
+      }
+    }
+    const base = syntheticAdapter(0, [offer('old'), offer('new')])
+    return {
+      ...base,
+      async discover(
+        input: Parameters<typeof base.discover>[0],
+        context: Parameters<typeof base.discover>[1],
+      ) {
+        const page = await base.discover(input, context)
+        return {
+          ...page,
+          candidates: page.candidates.filter((candidate) =>
+            refreshing
+              ? sourceId === 'second' && candidate.externalId === 'new'
+              : candidate.externalId === 'old',
+          ),
+        }
+      },
+      normalize(evidence: Parameters<typeof base.normalize>[0]) {
+        return refreshing &&
+          sourceId === 'second' &&
+          evidence.identity.externalId === 'old'
+          ? {
+              kind: 'rejected' as const,
+              error: {
+                code: 'PARSE_ERROR',
+                message: 'Synthetic rejected tail refresh',
+                retryable: false,
+              },
+            }
+          : base.normalize(evidence)
+      },
+    }
+  })
+  const seed = new ImportRuntime(path, 0, { ...clock, adapters: sources })
+  await imported(seed)
+  await seed.close()
+  refreshing = true
+  const runtime = new ImportRuntime(path, 0, {
+    ...clock,
+    detailLimit: 4,
+    adapters: sources,
+  })
+  runtimes.push(runtime)
+  const job = await imported(runtime)
+  expect(job).toMatchObject({
+    state: 'partial',
+    counts: { added: 1, unchanged: 1, rejected: 1 },
+    sources: [
+      { sourceId: 'first', state: 'succeeded' },
+      {
+        sourceId: 'second',
+        state: 'partial',
+        coverage: 'partial',
+        error: { code: 'PARSE_ERROR' },
+      },
+    ],
+    reasons: ['PARSE_ERROR'],
+  })
+  expect(
+    runtime.results({ area: initialArea, showUnavailable: true }).listings,
+  ).toHaveLength(3)
+})
+
+test('oldest successful refresh compares timestamp instants across UTC offsets', async () => {
+  const path = join(directory, 'offset-order.sqlite')
+  const clock = testClock(Date.parse('2026-10-16T00:00:00Z'))
+  const offers = ['earlier', 'later'].map((externalId) => {
+    const url = `https://example.invalid/${externalId}`
+    return {
+      ...fixtures[0],
+      primarySourceUrl: url,
+      sourceRefs: [{ ...fixtures[0].sourceRefs[0], externalId, url }],
+    }
+  })
+  let refreshing = false
+  const base = syntheticAdapter(0, offers)
+  const adapter = {
+    ...base,
+    async discover(
+      input: Parameters<typeof base.discover>[0],
+      context: Parameters<typeof base.discover>[1],
+    ) {
+      const page = await base.discover(input, context)
+      return refreshing ? { ...page, candidates: [] } : page
+    },
+    normalize(evidence: Parameters<typeof base.normalize>[0]) {
+      const result = base.normalize(evidence)
+      if (result.kind === 'accepted') {
+        result.observation.sourceCheckedAt =
+          evidence.identity.externalId === 'earlier'
+            ? '2026-10-01T01:00:00+09:00'
+            : '2026-09-30T20:00:00Z'
+        if (refreshing) result.observation.fields.salePriceJpy = 555
+      }
+      return result
+    },
+  }
+  const seed = new ImportRuntime(path, 0, { ...clock, adapters: [adapter] })
+  await imported(seed)
+  await seed.close()
+  refreshing = true
+  const runtime = new ImportRuntime(path, 0, {
+    ...clock,
+    detailLimit: 1,
+    adapters: [adapter],
+  })
+  runtimes.push(runtime)
+  expect(await imported(runtime)).toMatchObject({
+    state: 'partial',
+    counts: { updated: 1 },
+    budget: { detailUsed: 1 },
+  })
+  expect(
+    runtime
+      .results({ area: initialArea, showUnavailable: true })
+      .listings.filter((listing) => listing.salePriceJpy === 555)
+      .map((listing) => listing.sourceRefs[0].externalId),
+  ).toEqual(['earlier'])
+})
