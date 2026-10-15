@@ -17,12 +17,15 @@ The groups below are a recommended execution order, not new blocking relationshi
 
 ### 2. Extend the map and local runtime
 
-After #8, its map siblings can proceed independently:
+After #8, its map siblings can proceed independently (the additive address/place-search spec can also build on this foundation):
 
 - [#9 — Explore unverified and approximate listing pins](https://github.com/goncalvesjoao/open-akiya/issues/9)
 - [#10 — Explore municipality-only listings through summary pins](https://github.com/goncalvesjoao/open-akiya/issues/10)
 - [#11 — Inspect area-associated unknown-location listings](https://github.com/goncalvesjoao/open-akiya/issues/11)
 - [#12 — Recover from query and tile failures on desktop and mobile](https://github.com/goncalvesjoao/open-akiya/issues/12)
+- [#38 — Search by address or place name to select an area](https://github.com/goncalvesjoao/open-akiya/issues/38)
+
+#38 extends #2 acceptance with user-selected-center lookup and can run independently of backend/live-source work. Its provider and controlled UI/browser checks are required for the expanded #2 scope. Other tickets continue to exclude geocoding within their own scopes; listing geocoding remains excluded everywhere.
 
 After #13, build the runtime capabilities:
 

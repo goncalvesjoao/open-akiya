@@ -47,6 +47,8 @@ Nearby cached results and overlapping in-flight requests are reused. Geographic 
 29. As a user, I want a visible cancellable queue for other areas, so that only one import executes at a time.
 30. As a user, I want unavailable offers hidden by default but retained locally, so that I can inspect their history when needed.
 
+31. As a user, I want to find an address or place name and choose a match as my selected-area center, so that I do not need coordinates or manual map navigation.
+
 ## Implementation Decisions
 
 - This is the parent product spec. The [implementation plan](../implementation-plan.md) defines parallel start conditions and integration gates for these child specs:
@@ -73,7 +75,7 @@ Nearby cached results and overlapping in-flight requests are reused. Geographic 
 - At Home and LIFULL HOME'S are candidate integrations, not presumed authorized sources. Record access method, source terms, permission evidence where applicable, attribution, reuse limits, and rate policy per adapter. Keep unresolved adapters disabled; never bypass access blocks. Ship synthetic fixtures rather than scraped datasets or images.
 - One permitted municipal source is sufficient for the first live-source milestone if national-bank access remains unresolved. Explain unsupported areas rather than implying nationwide coverage.
 - Extend the existing listing schema through migrations. Preserve Japanese text, primary source URL, editorial visibility, and existing identifiers. Add source identities unique within each provider, separate sale price and monthly rent, property type, optional floor/land area, availability independent of publication status, first/last seen and successful-check timestamps, location precision/provenance, and normalized content hashes.
-- Normalize money to integer yen and areas to square metres. Missing prices are null; zero means explicitly free. Do not guess missing addresses or coordinates or add geocoding. Show individual pins for source-provided positions, labeling unverified accuracy and approximate distance as applicable; distinguish them from verified in-radius positions.
+- Normalize money to integer yen and areas to square metres. Missing prices are null; zero means explicitly free. Do not guess missing listing addresses or coordinates or geocode listing positions. User-entered address/place lookup for the selected-area center is allowed under #38. Show individual pins for source-provided positions, labeling unverified accuracy and approximate distance as applicable; distinguish them from verified in-radius positions.
 - Offers with only a known municipality use a distinct municipality summary pin with a count and list for municipalities intersecting the circle. Use a documented representative point, possibly outside the circle, and explain that it is not a house location and distance from the selected center is unknown. Offers with neither usable coordinates nor municipality stay in an Unknown location list without a pin.
 - Save source observations and public projections transactionally and idempotently. Preserve multiple source references for confirmed duplicate offers; uncertain cross-source matches remain separate. Sale and rental offers cannot overwrite each other. Partial responses cannot erase known values or moderation decisions.
 - A scoped scan cannot establish global withdrawal. Do not archive records because they disappear from search results, fail to load, or lie outside a later request. Handle explicit unavailable statuses independently and preserve provenance.
@@ -99,7 +101,7 @@ Nearby cached results and overlapping in-flight requests are reused. Geographic 
 - Nightly schedules, nationwide crawls, or automatic collection on map movement.
 - Guaranteed complete inventory or guaranteed precise radius coverage from approximate source locations.
 - Bypassing access restrictions, CAPTCHA, authentication requirements, or source blocks.
-- Translation services, photo mirroring, user accounts, geocoding, advanced listing filters beyond Show unavailable, automatic fuzzy property merging, and automatic archival based on search absence.
+- Translation services, photo mirroring, user accounts, geocoding listing positions, advanced listing filters beyond Show unavailable, automatic fuzzy property merging, and automatic archival based on search absence.
 - Paid discovery services.
 
 ## Further Notes
@@ -112,3 +114,11 @@ Nearby cached results and overlapping in-flight requests are reused. Geographic 
 ## Shared contract ownership
 
 Concrete contract alignment lives in existing children: #2 owns selected area/query semantics, #5 owns listing/results, job API and source adapter definitions, #6 owns policy extensions and response scenarios, and #7/#4 consume them. These documentation contracts permit parallel synthetic map/backend and mock UI work; they do not claim runtime implementation or source authorization. The implementation plan retains the integration gates. No additional alignment ticket is needed.
+
+## Address and place-name search extension
+
+[Spec #38](https://github.com/goncalvesjoao/open-akiya/issues/38) extends area selection with explicit address/place lookup and match selection. Choosing a match updates the center and map/circle/coordinate controls while preserving the accepted radius and Show unavailable setting. The existing SelectedArea and import API contracts remain unchanged. Lookup and match selection never start an import; running jobs retain their original areas.
+
+Location-search geocoding is permitted solely for the user-selected center; listing positions remain source-provided and retain their uncertainty rules. Existing child-ticket geocoding exclusions still apply to those tickets; #38 owns this additive capability and is required for the expanded map acceptance. It can build on the synthetic map independently of the import runtime and live listing sources.
+
+Testing confirmed by the user: React UI tests with a controlled location provider cover matching, ambiguity, no results, errors, stale responses, keyboard access and retaining valid selection. Extend one controlled Playwright map journey to verify result selection moves the map/circle with the radius preserved and no import request. No automated live geocoding requests. See #38 for the full acceptance scope and provider requirements.
