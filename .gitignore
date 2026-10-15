@@ -156,3 +156,6 @@ supabase/.branches/
 test-results/
 playwright-report/
 playwright/.cache/
+
+# Isolated Playwright build output
+.playwright-dist/
