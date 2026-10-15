@@ -5,7 +5,7 @@ import type {
   Location,
   SelectedArea,
 } from '../shared/listings'
-import { distanceMetres } from '../shared/geography'
+import { areasIntersect, distanceMetres } from '../shared/geography'
 import { fixtures, syntheticDiscoveryAreas } from './fixtures'
 
 export type AdapterCapabilities = {
@@ -111,11 +111,7 @@ export function syntheticAdapter(
         const scope = syntheticDiscoveryAreas.get(
           offer.sourceRefs[0].externalId,
         )
-        if (scope)
-          return (
-            distanceMetres(area.center, scope.center) <=
-            (area.radiusKm + scope.radiusKm) * 1000 + 1e-8
-          )
+        if (scope) return areasIntersect(area, scope)
         return (
           (offer.location.kind === 'verified' ||
             offer.location.kind === 'unverified') &&

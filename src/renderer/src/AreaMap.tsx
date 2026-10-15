@@ -45,6 +45,37 @@ function LocationUncertainty({ listing }: { listing: ListingProjection }) {
   )
 }
 
+function ListingRow({
+  listing,
+  area,
+  selected,
+  onSelect,
+}: {
+  listing: ListingProjection
+  area: SelectedArea
+  selected: boolean
+  onSelect: (id: string) => void
+}) {
+  return (
+    <li>
+      <button aria-pressed={selected} onClick={() => onSelect(listing.id)}>
+        {listingTitle(listing)}
+      </button>
+      <LocationUncertainty listing={listing} />
+      {listing.location.kind === 'verified' && (
+        <span>
+          {' '}
+          ·{' '}
+          {(distanceMetres(area.center, listing.location.point) / 1000).toFixed(
+            2,
+          )}{' '}
+          km · Verified synthetic position
+        </span>
+      )}
+    </li>
+  )
+}
+
 function ListingDetails({ listing }: { listing: ListingProjection }) {
   return (
     <section aria-label="Listing details" className="listing-details">
@@ -352,26 +383,13 @@ export default function AreaMap() {
             {listings
               .filter((listing) => listing.location.kind !== 'unknown')
               .map((listing) => (
-                <li key={listing.id}>
-                  <button
-                    aria-pressed={selectedId === listing.id}
-                    onClick={() => setSelectedId(listing.id)}
-                  >
-                    {listingTitle(listing)}
-                  </button>
-                  <LocationUncertainty listing={listing} />
-                  {listing.location.kind === 'verified' && (
-                    <span>
-                      {' '}
-                      ·{' '}
-                      {(
-                        distanceMetres(area.center, listing.location.point) /
-                        1000
-                      ).toFixed(2)}{' '}
-                      km · Verified synthetic position
-                    </span>
-                  )}
-                </li>
+                <ListingRow
+                  key={listing.id}
+                  listing={listing}
+                  area={area}
+                  selected={selectedId === listing.id}
+                  onSelect={setSelectedId}
+                />
               ))}
           </ul>
           <h3>Unknown location</h3>
@@ -379,15 +397,13 @@ export default function AreaMap() {
             {listings
               .filter((listing) => listing.location.kind === 'unknown')
               .map((listing) => (
-                <li key={listing.id}>
-                  <button
-                    aria-pressed={selectedId === listing.id}
-                    onClick={() => setSelectedId(listing.id)}
-                  >
-                    {listingTitle(listing)}
-                  </button>
-                  <LocationUncertainty listing={listing} />
-                </li>
+                <ListingRow
+                  key={listing.id}
+                  listing={listing}
+                  area={area}
+                  selected={selectedId === listing.id}
+                  onSelect={setSelectedId}
+                />
               ))}
           </ul>
           {selected && <ListingDetails listing={selected} />}

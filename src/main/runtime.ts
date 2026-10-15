@@ -1,6 +1,10 @@
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
-import { distanceMetres, isSelectedArea } from '../shared/geography'
+import {
+  areasIntersect,
+  distanceMetres,
+  isSelectedArea,
+} from '../shared/geography'
 import type {
   AreaResults,
   Coverage,
@@ -314,10 +318,7 @@ export class ImportRuntime {
                 .all(listing.id)
                 .some((row) => {
                   const scope: SelectedArea = JSON.parse(String(row.area))
-                  return (
-                    distanceMetres(area.center, scope.center) <=
-                    (area.radiusKm + scope.radiusKm) * 1000 + 1e-8
-                  )
+                  return areasIntersect(area, scope)
                 })),
       ),
       municipalityGroups: [],
