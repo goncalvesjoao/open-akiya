@@ -56,4 +56,29 @@ $$;
 set local role anon;
 select id from public.listings where source_url = 'https://example.invalid/preserved';
 reset role;
+insert into public.listings(source_url,source_name,title_ja,prefecture,status)
+  values ('https://example.invalid/private-import','Fixture','非公開の元情報','','draft');
+do $$
+declare browser_role text;
+begin
+  foreach browser_role in array array['anon', 'authenticated'] loop
+    execute format('set local role %I', browser_role);
+    begin
+      perform * from import_runtime.observations;
+      raise exception 'Browser role read private evidence';
+    exception when insufficient_privilege then null;
+    end;
+    if exists(select from public.listings where source_url='https://example.invalid/private-import') then
+      raise exception 'Browser role read unpublished import';
+    end if;
+    begin
+      insert into public.listings(source_url,source_name,title_ja,prefecture)
+        values ('https://example.invalid/forbidden','Fixture','禁止','');
+      raise exception 'Browser role wrote imported data';
+    exception when insufficient_privilege then null;
+    end;
+    reset role;
+  end loop;
+end;
+$$;
 rollback;

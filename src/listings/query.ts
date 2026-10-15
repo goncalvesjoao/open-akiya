@@ -104,7 +104,9 @@ function numberBetween(
 export function isSelectedArea(value: unknown): value is SelectedArea {
   return (
     record(value) &&
+    Object.keys(value).length === 2 &&
     record(value.center) &&
+    Object.keys(value.center).length === 2 &&
     numberBetween(value.center.latitude, -90, 90) &&
     numberBetween(value.center.longitude, -180, 180) &&
     numberBetween(value.radiusKm, 0, 10) &&

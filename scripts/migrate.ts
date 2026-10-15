@@ -12,6 +12,9 @@ try {
     name text primary key, applied_at timestamptz not null default now()
   )`)
   await client.query(
+    'alter table public.local_import_migrations enable row level security',
+  )
+  await client.query(
     'revoke all on public.local_import_migrations from public, anon, authenticated',
   )
   const directory = fileURLToPath(
