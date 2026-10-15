@@ -7,7 +7,7 @@ import {
 } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import AreaMap from './AreaMap'
-import { municipalityFixtures } from '../../main/fixtures'
+import { fixtures, municipalityFixtures } from '../../main/fixtures'
 import { initialArea } from '../../shared/geography'
 import type { AreaResults } from '../../shared/listings'
 
@@ -81,9 +81,10 @@ test('keeps municipality offers in expandable groups without duplicate rows or f
   expect(within(group).queryByText(/\d+\.\d+ km/)).toBeNull()
 })
 
-test('retries rejected queries without changing the accepted selection', async () => {
-  const { fixtures } = await import('../../main/fixtures')
-  const result: AreaResults = {
+function savedResults(
+  coverage: Partial<AreaResults['coverage']> = {},
+): AreaResults {
+  return {
     area: initialArea,
     showUnavailable: false,
     mode: 'synthetic',
@@ -95,9 +96,14 @@ test('retries rejected queries without changing the accepted selection', async (
       freshUntil: null,
       scopeKey: null,
       caveats: [],
+      ...coverage,
     },
     generatedAt: '2026-10-15T00:00:00Z',
   }
+}
+
+test('retries rejected queries without changing the accepted selection', async () => {
+  const result = savedResults()
   const query = vi
     .fn()
     .mockRejectedValueOnce(new Error('offline'))
@@ -114,22 +120,7 @@ test('retries rejected queries without changing the accepted selection', async (
 })
 
 test('hides previous-area results while loading and ignores late responses after a newer empty result', async () => {
-  const { fixtures } = await import('../../main/fixtures')
-  const result: AreaResults = {
-    area: initialArea,
-    showUnavailable: false,
-    mode: 'synthetic',
-    listings: [fixtures[0]],
-    municipalityGroups: [],
-    coverage: {
-      status: 'unknown',
-      lastSuccessfulCheckAt: null,
-      freshUntil: null,
-      scopeKey: null,
-      caveats: [],
-    },
-    generatedAt: '2026-10-15T00:00:00Z',
-  }
+  const result = savedResults()
   let resolveOlder!: (value: AreaResults) => void
   const query = vi
     .fn()
@@ -183,22 +174,11 @@ test('hides previous-area results while loading and ignores late responses after
 })
 
 test('keeps selected details and truthful coverage when refreshing saved results fails', async () => {
-  const { fixtures } = await import('../../main/fixtures')
-  const result: AreaResults = {
-    area: initialArea,
-    showUnavailable: false,
-    mode: 'synthetic',
-    listings: [fixtures[0]],
-    municipalityGroups: [],
-    coverage: {
-      status: 'partial',
-      lastSuccessfulCheckAt: '2026-10-14T00:00:00Z',
-      freshUntil: null,
-      scopeKey: null,
-      caveats: ['Configured synthetic sources only'],
-    },
-    generatedAt: '2026-10-15T00:00:00Z',
-  }
+  const result = savedResults({
+    status: 'partial',
+    lastSuccessfulCheckAt: '2026-10-14T00:00:00Z',
+    caveats: ['Configured synthetic sources only'],
+  })
   let refresh!: () => void
   const query = vi
     .fn()
