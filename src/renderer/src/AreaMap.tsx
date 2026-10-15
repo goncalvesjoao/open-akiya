@@ -25,6 +25,13 @@ function money(value: number | null) {
 }
 
 function LocationUncertainty({ listing }: { listing: ListingProjection }) {
+  if (listing.location.kind === 'unknown')
+    return (
+      <span className="location-uncertainty">
+        Exact location and distance unknown. Shown because saved discovery
+        evidence associates this offer with an intersecting source query.
+      </span>
+    )
   if (listing.location.kind !== 'unverified') return null
   return (
     <span className="location-uncertainty">
@@ -35,6 +42,37 @@ function LocationUncertainty({ listing }: { listing: ListingProjection }) {
       . True distance and radius membership are uncertain. Shown because the
       source point is inside the selected circle.
     </span>
+  )
+}
+
+function ListingRow({
+  listing,
+  area,
+  selected,
+  onSelect,
+}: {
+  listing: ListingProjection
+  area: SelectedArea
+  selected: boolean
+  onSelect: (id: string) => void
+}) {
+  return (
+    <li>
+      <button aria-pressed={selected} onClick={() => onSelect(listing.id)}>
+        {listingTitle(listing)}
+      </button>
+      <LocationUncertainty listing={listing} />
+      {listing.location.kind === 'verified' && (
+        <span>
+          {' '}
+          ·{' '}
+          {(distanceMetres(area.center, listing.location.point) / 1000).toFixed(
+            2,
+          )}{' '}
+          km · Verified synthetic position
+        </span>
+      )}
+    </li>
   )
 }
 
@@ -342,27 +380,31 @@ export default function AreaMap() {
             </p>
           )}
           <ul className="listing-results" aria-label="Listing results">
-            {listings.map((listing) => (
-              <li key={listing.id}>
-                <button
-                  aria-pressed={selectedId === listing.id}
-                  onClick={() => setSelectedId(listing.id)}
-                >
-                  {listingTitle(listing)}
-                </button>
-                <LocationUncertainty listing={listing} />
-                {listing.location.kind === 'verified' && (
-                  <span>
-                    {' '}
-                    ·{' '}
-                    {(
-                      distanceMetres(area.center, listing.location.point) / 1000
-                    ).toFixed(2)}{' '}
-                    km · Verified synthetic position
-                  </span>
-                )}
-              </li>
-            ))}
+            {listings
+              .filter((listing) => listing.location.kind !== 'unknown')
+              .map((listing) => (
+                <ListingRow
+                  key={listing.id}
+                  listing={listing}
+                  area={area}
+                  selected={selectedId === listing.id}
+                  onSelect={setSelectedId}
+                />
+              ))}
+          </ul>
+          <h3>Unknown location</h3>
+          <ul className="listing-results" aria-label="Unknown location">
+            {listings
+              .filter((listing) => listing.location.kind === 'unknown')
+              .map((listing) => (
+                <ListingRow
+                  key={listing.id}
+                  listing={listing}
+                  area={area}
+                  selected={selectedId === listing.id}
+                  onSelect={setSelectedId}
+                />
+              ))}
           </ul>
           {selected && <ListingDetails listing={selected} />}
         </div>

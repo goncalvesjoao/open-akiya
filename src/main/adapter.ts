@@ -5,8 +5,8 @@ import type {
   Location,
   SelectedArea,
 } from '../shared/listings'
-import { distanceMetres } from '../shared/geography'
-import { fixtures } from './fixtures'
+import { areasIntersect, distanceMetres } from '../shared/geography'
+import { fixtures, syntheticDiscoveryAreas } from './fixtures'
 
 export type AdapterCapabilities = {
   sourceId: string
@@ -107,24 +107,34 @@ export function syntheticAdapter(
     },
     async discover({ area }, context) {
       await context.request('discovery', 'https://example.invalid/discovery')
-      const inside = offers.filter(
-        (offer) =>
+      const inside = offers.filter((offer) => {
+        const scope = syntheticDiscoveryAreas.get(
+          offer.sourceRefs[0].externalId,
+        )
+        if (scope) return areasIntersect(area, scope)
+        return (
           (offer.location.kind === 'verified' ||
             offer.location.kind === 'unverified') &&
           distanceMetres(area.center, offer.location.point) <=
-            area.radiusKm * 1000 + 1e-8,
-      )
+            area.radiusKm * 1000 + 1e-8
+        )
+      })
       return {
         candidates: inside.map((offer) => ({
           externalId: offer.sourceRefs[0].externalId,
           transactionType: offer.transactionType,
           url: offer.primarySourceUrl,
-          location: offer.location,
+          location: syntheticDiscoveryAreas.has(offer.sourceRefs[0].externalId)
+            ? { kind: 'unknown' }
+            : offer.location,
           municipalityId: null,
           publishedAt: null,
           modifiedAt: null,
           relevance:
-            offer.location.kind === 'verified' ? 'known_inside' : 'plausible',
+            offer.location.kind === 'verified' &&
+            !syntheticDiscoveryAreas.has(offer.sourceRefs[0].externalId)
+              ? 'known_inside'
+              : 'plausible',
         })),
         nextCursor: null,
         exhausted: true,

@@ -1,11 +1,11 @@
-import type { ListingProjection, Point } from '../shared/listings'
+import type { ListingProjection, Point, SelectedArea } from '../shared/listings'
 
 const checked = '2026-10-15T00:00:00Z'
 
 function fixture(
   id: string,
   titleJa: string,
-  point: Point,
+  point: Point | null,
   values: Partial<ListingProjection> = {},
 ): ListingProjection {
   const externalId = id.replace('sample-', '')
@@ -28,12 +28,14 @@ function fixture(
     municipalityId: null,
     municipalityNameJa: null,
     availability: 'unknown',
-    location: {
-      kind: 'verified',
-      point,
-      evidence: 'synthetic verification',
-      verifiedAt: checked,
-    },
+    location: point
+      ? {
+          kind: 'verified',
+          point,
+          evidence: 'synthetic verification',
+          verifiedAt: checked,
+        }
+      : { kind: 'unknown' },
     firstSeenAt: checked,
     lastSeenAt: checked,
     sourceCheckedAt: checked,
@@ -118,4 +120,38 @@ export const uncertainFixtures: ListingProjection[] = [
       },
     },
   ),
+]
+
+// Scope evidence describes the synthetic source query, never a house position.
+export const syntheticDiscoveryAreas = new Map<string, SelectedArea>([
+  [
+    'location-unknown-1',
+    { center: { latitude: 35, longitude: 135 }, radiusKm: 5 },
+  ],
+  [
+    'location-unknown-unavailable-1',
+    { center: { latitude: 35, longitude: 135 }, radiusKm: 5 },
+  ],
+  [
+    'location-unrelated-1',
+    { center: { latitude: 36, longitude: 135 }, radiusKm: 5 },
+  ],
+  [
+    'precise-outside-1',
+    { center: { latitude: 35, longitude: 135 }, radiusKm: 5 },
+  ],
+])
+export const unknownFixtures: ListingProjection[] = [
+  fixture('sample-location-unknown-1', '所在地不明のサンプル', null),
+  fixture(
+    'sample-location-unknown-unavailable-1',
+    '募集終了の所在地不明サンプル',
+    null,
+    { availability: 'unavailable' },
+  ),
+  fixture('sample-location-unrelated-1', '別地域の所在地不明サンプル', null),
+  fixture('sample-precise-outside-1', '位置判明の範囲外サンプル', {
+    latitude: 36,
+    longitude: 135,
+  }),
 ]

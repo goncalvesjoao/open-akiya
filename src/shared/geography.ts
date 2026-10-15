@@ -49,6 +49,13 @@ export function distanceMetres(a: Point, b: Point): number {
   )
 }
 
+export function areasIntersect(a: SelectedArea, b: SelectedArea): boolean {
+  return (
+    distanceMetres(a.center, b.center) <=
+    (a.radiusKm + b.radiusKm) * 1000 + 1e-8
+  )
+}
+
 const sourceHosts: Record<string, string> = { fixture: 'example.invalid' }
 export function safeSourceUrl(sourceId: string, value: string): string | null {
   try {

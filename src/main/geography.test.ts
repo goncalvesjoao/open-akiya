@@ -1,5 +1,8 @@
 // @vitest-environment node
 import { expect, test, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { ImportRuntime } from './runtime'
 import { syntheticAdapter } from './adapter'
 import { fixtures, uncertainFixtures } from './fixtures'
@@ -171,5 +174,66 @@ test('returns both uncertain source-point variants as candidates without claimin
     ).toEqual([])
   } finally {
     await local.close()
+  }
+})
+
+test('returns only unknown candidates with saved intersecting discovery evidence and respects precise outside positions', async () => {
+  const { unknownFixtures } = await import('./fixtures')
+  const directory = mkdtempSync(join(tmpdir(), 'akiya-unknown-query-'))
+  const database = join(directory, 'listings.sqlite')
+  let local = new ImportRuntime(database, 0, {
+    adapters: [syntheticAdapter(0, unknownFixtures)],
+  })
+  try {
+    for (const [key, area] of [
+      ['near', initialArea],
+      ['far', { center: { latitude: 36, longitude: 135 }, radiusKm: 5 }],
+    ] as const) {
+      const request = local.createRequest({
+        area,
+        intent: 'import',
+        idempotencyKey: key,
+      })
+      await expect
+        .poll(() => local.inspect(request.jobIds[0]).state)
+        .toBe('succeeded')
+    }
+    await local.close()
+    local = new ImportRuntime(database, 0, {
+      adapters: [syntheticAdapter(0, unknownFixtures)],
+    })
+    // The precise outside listing was saved, but its broad discovery scope
+    // must not put it in the near-area unknown candidates.
+    expect(
+      local
+        .results({
+          area: { center: { latitude: 36, longitude: 135 }, radiusKm: 1 },
+          showUnavailable: false,
+        })
+        .listings.map((listing) => listing.sourceRefs[0].externalId),
+    ).toContain('precise-outside-1')
+    const query = {
+      area: { center: { latitude: 35.05, longitude: 135 }, radiusKm: 1 },
+      showUnavailable: false,
+    }
+    const result = local.results(query)
+    expect(
+      result.listings.map((listing) => listing.sourceRefs[0].externalId),
+    ).toEqual(['location-unknown-1'])
+    expect(result.listings[0].location).toEqual({ kind: 'unknown' })
+    expect(
+      local
+        .results({ ...query, showUnavailable: true })
+        .listings.map((listing) => listing.sourceRefs[0].externalId),
+    ).toEqual(['location-unknown-1', 'location-unknown-unavailable-1'])
+    expect(
+      local.results({
+        area: { center: { latitude: 34, longitude: 135 }, radiusKm: 1 },
+        showUnavailable: true,
+      }).listings,
+    ).toEqual([])
+  } finally {
+    await local.close()
+    rmSync(directory, { recursive: true, force: true })
   }
 })
