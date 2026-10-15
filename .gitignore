@@ -151,3 +151,8 @@ vite.config.ts.timestamp-*
 # Supabase local state
 supabase/.temp/
 supabase/.branches/
+
+# Playwright artifacts
+test-results/
+playwright-report/
+playwright/.cache/

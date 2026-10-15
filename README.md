@@ -31,6 +31,8 @@ Only public browser credentials belong in `VITE_` variables. Never use a secret 
 ```sh
 npm test             # Run tests once
 npm run test:watch   # Re-run tests as files change
+npm run test:e2e     # Run Playwright tests in Chromium
+npm run test:e2e:ui  # Open Playwright's interactive test runner
 npm run lint         # ESLint
 npm run format       # Format with Prettier
 npm run format:check # Check Prettier formatting
@@ -39,6 +41,8 @@ npm run preview      # Serve the production build locally
 ```
 
 Tests use Vitest with React Testing Library and jsdom. The first test renders the landing page and checks that its contribution link points to the project repository. Add tests alongside the code using `.test.ts` or `.test.tsx` filenames; shared test setup lives in `src/test/setup.ts`.
+
+End-to-end tests live in `e2e/` and use Playwright. Install Chromium once with `npx playwright install chromium`, then run `npm run test:e2e`. Playwright builds the app and starts a local preview server automatically. The landing page test follows the “Meet the project” link and checks that the about section enters the viewport.
 
 The production output is `dist/`, suitable for static hosting. Set the Supabase environment variables before building if the deployment will use the backend. The landing page uses Google Fonts with system font fallbacks.
 
