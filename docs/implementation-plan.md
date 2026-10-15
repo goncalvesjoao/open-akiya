@@ -2,7 +2,81 @@
 
 This is the execution plan for [parent spec #1](https://github.com/goncalvesjoao/open-akiya/issues/1). Requirements and acceptance tests belong to the linked specs; this document owns coordination, parallel work, and integration gates. The project currently has a landing page and a basic listing schema; this plan does not claim implementation work is complete.
 
-Use the [copy-and-paste session prompts](session-prompts.md) to align contracts, prepare implementation tickets, and investigate the first live source in fresh sessions.
+## Implementation worklist
+
+Contract alignment and ticket breakdowns are complete. Start with **#8 (sample map)** and **#13 (durable synthetic import)**; these foundations can proceed independently. If working sequentially, tackle #8, then #13, then select the next ticket whose start conditions are satisfied. Source-shaped fixtures (#33–#35), policy fixtures and mock UI work can proceed against the documented contracts while the runtime finishes.
+
+The groups below are a recommended execution order, not new blocking relationships or a duplicated status tracker. Read each ticket's current start conditions, comments and native dependencies before implementing it; GitHub owns live status. Complete verification within each slice.
+
+### 1. Establish the map and worker foundations
+
+- [#8 — Explore verified sample listings within a selected area](https://github.com/goncalvesjoao/open-akiya/issues/8)
+- [#13 — Import and inspect one synthetic listing through a durable local job](https://github.com/goncalvesjoao/open-akiya/issues/13)
+
+#13 includes local Docker/Supabase prerequisites, the job API test harness and transactional storage foundation. Neither foundation requires a permitted live source.
+
+### 2. Extend the map and local runtime
+
+After #8, its map siblings can proceed independently (the additive address/place-search spec can also build on this foundation):
+
+- [#9 — Explore unverified and approximate listing pins](https://github.com/goncalvesjoao/open-akiya/issues/9)
+- [#10 — Explore municipality-only listings through summary pins](https://github.com/goncalvesjoao/open-akiya/issues/10)
+- [#11 — Inspect area-associated unknown-location listings](https://github.com/goncalvesjoao/open-akiya/issues/11)
+- [#12 — Recover from query and tile failures on desktop and mobile](https://github.com/goncalvesjoao/open-akiya/issues/12)
+- [#38 — Search by address or place name to select an area](https://github.com/goncalvesjoao/open-akiya/issues/38)
+
+#38 extends #2 acceptance with user-selected-center lookup and can run independently of backend/live-source work. Its provider and controlled UI/browser checks are required for the expanded #2 scope. Other tickets continue to exclude geocoding within their own scopes; listing geocoding remains excluded everywhere.
+
+After #13, build the runtime capabilities:
+
+- [#14 — Re-import changed offers without duplicates or loss of valid data](https://github.com/goncalvesjoao/open-akiya/issues/14)
+- [#15 — Query saved listings with truthful geographic relevance](https://github.com/goncalvesjoao/open-akiya/issues/15)
+- [#16 — Finish bounded imports with truthful partial, empty and failed outcomes](https://github.com/goncalvesjoao/open-akiya/issues/16)
+- [#17 — Cancel queued and running imports without losing committed results](https://github.com/goncalvesjoao/open-akiya/issues/17)
+- [#18 — Recover interrupted imports without replaying committed effects](https://github.com/goncalvesjoao/open-akiya/issues/18)
+- [#19 — Retain current-source availability when another source withdraws an offer](https://github.com/goncalvesjoao/open-akiya/issues/19)
+
+#14–#17 can start after #13. #18 requires #16 and #17; #19 requires #14. Verify the runtime through the shared job API seam with test Postgres and deterministic adapters.
+
+### 3. Implement reuse, refresh and continuation
+
+- [#20 — Reuse fresh covering area imports and recent listing details](https://github.com/goncalvesjoao/open-akiya/issues/20)
+- [#21 — Attach requests to covering active work and cancel shared intent safely](https://github.com/goncalvesjoao/open-akiya/issues/21)
+- [#22 — Reserve refresh capacity for older known offers](https://github.com/goncalvesjoao/open-akiya/issues/22)
+- [#23 — Continue incomplete searches through explicit bounded jobs](https://github.com/goncalvesjoao/open-akiya/issues/23)
+- [#24 — Advance discovery checkpoints only from safely completed traversal](https://github.com/goncalvesjoao/open-akiya/issues/24)
+- [#25 — Preserve manual-refresh intent through bounded follow-up work](https://github.com/goncalvesjoao/open-akiya/issues/25)
+- [#26 — Recover expired cursors with a bounded explained restart](https://github.com/goncalvesjoao/open-akiya/issues/26)
+
+#20–#24 permit contract-backed development now; runtime verification needs the capabilities named in each ticket. #25 requires #21's shared-work ownership; #26 requires #23's continuation path. Prepare their fixtures earlier if useful. Complete #6 only after integration with #5.
+
+### 4. Connect import controls to the map
+
+- [#27 — Import a selected area and discover saved results](https://github.com/goncalvesjoao/open-akiya/issues/27)
+- [#28 — Inspect and cancel queued or running imports](https://github.com/goncalvesjoao/open-akiya/issues/28)
+- [#29 — Recover import progress after reload or runtime interruption](https://github.com/goncalvesjoao/open-akiya/issues/29)
+- [#30 — Request Refresh anyway and track its follow-ups](https://github.com/goncalvesjoao/open-akiya/issues/30)
+- [#31 — Continue incomplete searches with truthful outcomes](https://github.com/goncalvesjoao/open-akiya/issues/31)
+- [#32 — Explore imported listings through the real local workflow](https://github.com/goncalvesjoao/open-akiya/issues/32)
+
+#27 can start with mocked API responses; its map demo needs #8. #28, #29 and #31 start after #27; #30 starts after #27 and #28. #30 is needed for #31's exhausted-refresh-follow-up scenario, rather than all continuation development. #32 requires the preceding UI slices and completed #2/#6, including the real runtime. Reuse the agreed fixtures rather than creating browser-only response shapes.
+
+After #5, #6 and #7 pass their integrated acceptance, evaluate aggregate #3. #1 and #3 are acceptance parents, not additional implementation tickets.
+
+### 5. Develop the permitted source and run the gated pilot
+
+- [#33 — Discover Tsubata offers for an intersecting selected area](https://github.com/goncalvesjoao/open-akiya/issues/33)
+- [#34 — Normalize and persist Tsubata sale and rental offers](https://github.com/goncalvesjoao/open-akiya/issues/34)
+- [#35 — Preserve Tsubata results through failures and explicit continuation](https://github.com/goncalvesjoao/open-akiya/issues/35)
+- [#36 — Run and document the small Tsubata live pilot](https://github.com/goncalvesjoao/open-akiya/issues/36)
+
+#33–#35 can start source-shaped fixture development now and overlap the other workstreams. Reuse the shared worker transport, normalization/storage boundary and job API tests as those capabilities become available; routine automated checks make no live-source requests.
+
+The [Tsubata investigation](research/first-live-source.md) identifies the official municipal CSV as a feasible permitted transport. Live activation still requires reviewed geographic reference/reuse evidence, safe offer identities and affirmative residential eligibility. Keep date-based early stopping disabled because this source has no verified per-offer date ordering. Do not use the disallowed catalog API, linked assets or paid discovery.
+
+#36 starts only after #33–#35 and aggregate #3 are complete, with source activation gates resolved. If those checks fail, retain the disabled integration and report the specific blocker. The documented bounded live pilot is required to complete #4; fixtures alone do not satisfy it.
+
+When all acceptance gates for #2, #3 and #4 pass, evaluate parent #1 completion.
 
 ## Start conditions and completion gates
 
@@ -18,7 +92,7 @@ Use the [copy-and-paste session prompts](session-prompts.md) to align contracts,
 
 ## Parallel work
 
-Start with a short contract-alignment step, then run the map (#2), backend foundation (#5), and source investigation (#4) as separate workstreams. Once job contracts are stable, #6 and #7 can overlap: #6 implements policies while #7 develops the UI against representative responses. Live-adapter fixture work can also overlap when its access method and adapter contract are resolved. The real end-to-end checks and live pilot remain completion gates.
+The shared contracts are aligned. Run the map (#2), backend foundation (#5), and Tsubata fixture development (#4) as separate workstreams. Once job contracts are stable, #6 and #7 can overlap: #6 implements policies while #7 develops the UI against representative responses. Live-adapter fixture work can also overlap when its access method and adapter contract are resolved. The real end-to-end checks and live pilot remain completion gates.
 
 ```mermaid
 flowchart LR
@@ -73,6 +147,6 @@ Do not add duplicate implementation tasks for #1 or #3. Preserve bounded request
 
 - [#2 selected-area/query contract](specs/map-area-selection.md#shared-selected-area-and-query-contract) and [#5 listing/results/job/adapter contracts](specs/persistent-local-import-runtime.md#shared-contracts-listing-projection-and-area-results) permit map and backend foundation work in parallel.
 - [#6 policy examples](specs/import-reuse-and-continuation.md#shared-policy-extensions-and-response-examples) permit policy fixture work and [#7 mock UI development](specs/import-progress-map-ui.md#contract-consumption-and-fixture-handoff) while the runtime finishes. Concrete recipes cover queued/running, empty success, partial/continuation, cursor restart, refresh follow-up, cancellation and failure. Implementations should materialize the same recipes as fixtures; none exist in runtime code yet.
-- [#4 source handoff](specs/live-area-source-integration.md#shared-contract-handoff-and-remaining-source-decisions) retains the unresolved permitted-source and geographic-evidence gates. Investigation can proceed now; enabled live work and its pilot retain their existing requirements.
+- [#4 source handoff](specs/live-area-source-integration.md#shared-contract-handoff-and-remaining-source-decisions) and the [Tsubata investigation](research/first-live-source.md) support source-shaped fixture development. Live activation retains the geographic-reference, identity and residential-eligibility gates; #36 retains the integrated-flow and access requirements.
 
 No new product choice blocks synthetic parallel work. Technical recommendations are explicit in the owning specs, including a configurable 25% stale-refresh reservation. Readiness here refers to interface documentation; all existing acceptance checks and completion dependencies remain required.

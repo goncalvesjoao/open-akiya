@@ -75,6 +75,8 @@ Implement and verify one permitted live source through the established adapter c
 - Primary research references: [MLIT national banks](https://www.mlit.go.jp/totikensangyo/const/sosei_const_tk3_000131.html), [At Home terms](https://www.akiya-athome.jp/contents/index/?page=kiyaku), and [LIFULL terms](https://www.homes.co.jp/kiyaku/). Recheck applicable conditions during source onboarding.
 - [LIFULL municipality results](https://www.homes.co.jp/akiyabank/kanagawa/chigasaki/) expose separate new-arrival and update-date sorting; this alone does not establish ordering or timestamp guarantees. The design interview confirmed conditional early stopping, not an assumption that either national bank currently supports it safely.
 
+Source investigation, 2026-10-15: [Tsubata Town official CSV findings](../research/first-live-source.md) nominate a permitted municipal export candidate and record access, reuse, identity, geography, date, and continuation evidence. Identity/eligibility validation, a reviewed geographic reference, and the gated live pilot remain outstanding; no adapter is enabled and this spec remains incomplete.
+
 ## Shared contract handoff and remaining source decisions
 
 Consume #2's area/query semantics, #5's listing projection and internal source-adapter contract, and #6's cursor/checkpoint/manual-refresh policies. Source-native evidence normalizes into those observations; do not create a parallel live-only job or map DTO. Use their concrete synthetic request/response recipes with source-shaped fixture evidence. The nightly-plan document is background; its schedules, absence-based reconciliation and geocoding suggestions do not override these on-demand specs.

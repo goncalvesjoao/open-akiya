@@ -32,7 +32,11 @@ Provide a responsive map and companion results list using clearly labeled synthe
 18. As a user, I want unknown-location offers accessible without a fabricated pin, so that I can still inspect their source information.
 19. As a user, I want unavailable offers hidden by default but accessible through Show unavailable, so that I can explore current offers without losing history.
 
+20. As a user, I want to search for an address or place name and explicitly choose a matching location, so that I can select an area without knowing coordinates.
+
 ## Implementation Decisions
+
+- Use English for the current interface, including navigation, controls, statuses, accessible names and synthetic listing display titles. English and Japanese may become interface locales later; no locale selector or Japanese interface is required now. Keep original Japanese source fields unchanged and available in a separately labeled, initially collapsed original-source section. Authored English synthetic fixture labels are presentation text, not translations of real source content. Do not change the shared listing DTO or introduce automatic translation.
 
 - Build on the existing React/TypeScript app and retain a clear route or navigation back to project information. No backend is required for this milestone.
 - Choose a map library and tile provider during implementation; document attribution, configuration, network requirements, and any required user key. Locally running does not mean offline tiles. Do not require browser geolocation.
@@ -58,7 +62,7 @@ Provide a responsive map and companion results list using clearly labeled synthe
 ## Out of Scope
 
 - Import workers, job persistence, live bank adapters and collection scheduling.
-- Geocoding, automatic user location, route planning, translation, photo copying, and advanced filters beyond Show unavailable.
+- Geocoding listing positions, automatic user location, route planning, translation, photo copying, and advanced filters beyond Show unavailable. User-entered address/place lookup for selecting the area center is included through #38.
 - Public deployment and a distributed real listing dataset.
 
 ## Further Notes
@@ -90,4 +94,12 @@ The replaceable boundary is `queryListings(query: AreaQuery): Promise<AreaResult
 
 Verified coordinates are filtered by inclusive circle membership. Unverified/approximate source points inside the circle are uncertain candidates, never verified membership. Municipality-only offers are included when their known municipality intersects the circle, regardless of the representative point. Unknown-location candidates require saved discovery evidence associating them with this area or an intersecting source query; do not return every unknown listing in the installation. A known precise outside point overrides broad query membership and is excluded. Municipality identity/intersection and representative-point provenance come from a documented reference or adapter evidence; absent evidence is unsupported coverage, not invented geography.
 
-Map fixtures consume #5's four location variants. Display `distanceKm` only for verified positions; for unverified pins an optional coordinate distance must be labeled approximate and must not replace the unknown true distance. Municipality summaries and unknown-location entries have no house distance. Apply Show unavailable before grouping/counting so a group count equals its visible listing IDs. Groups do not duplicate listings in the list. No location inference or geocoding is introduced.
+Map fixtures consume #5's four location variants. Display `distanceKm` only for verified positions; for unverified pins an optional coordinate distance must be labeled approximate and must not replace the unknown true distance. Municipality summaries and unknown-location entries have no house distance. Apply Show unavailable before grouping/counting so a group count equals its visible listing IDs. Groups do not duplicate listings in the list. No listing-location inference or listing geocoding is introduced. Address/place lookup under #38 resolves only the selected-area center.
+
+## Address and place-name search extension
+
+[Spec #38](https://github.com/goncalvesjoao/open-akiya/issues/38) extends area selection with explicit address/place lookup and match selection. Choosing a match updates the center and map/circle/coordinate controls while preserving the accepted radius and Show unavailable setting. The existing SelectedArea and import API contracts remain unchanged. Lookup and match selection never start an import; running jobs retain their original areas.
+
+Location-search geocoding is permitted solely for the user-selected center; listing positions remain source-provided and retain their uncertainty rules. Existing child-ticket geocoding exclusions still apply to those tickets; #38 owns this additive capability and is required for the expanded map acceptance. It can build on the synthetic map independently of the import runtime and live listing sources.
+
+Testing confirmed by the user: React UI tests with a controlled location provider cover matching, ambiguity, no results, errors, stale responses, keyboard access and retaining valid selection. Extend one controlled Playwright map journey to verify result selection moves the map/circle with the radius preserved and no import request. No automated live geocoding requests. See #38 for the full acceptance scope and provider requirements.
