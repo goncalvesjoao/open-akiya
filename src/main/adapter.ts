@@ -60,6 +60,11 @@ export type NormalizedFields = Omit<
   | 'sourceCheckedAt'
 >
 export type SourceObservation = {
+  confirmedDuplicateOf?: {
+    sourceId: string
+    externalId: string
+    evidence: string
+  }
   identity: { sourceId: string; externalId: string }
   url: string
   adapterVersion: string
