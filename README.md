@@ -8,7 +8,7 @@ The goal is simple: make information that is already public easier to find and u
 
 ## Development
 
-The foundation uses React, TypeScript, Vite, and Supabase. The current app is a responsive landing page; the interactive map and listing ingestion are future work.
+The foundation uses React, TypeScript, Vite, and Supabase. The app includes a synthetic listing map and a local synthetic import API/worker backed by Postgres.
 
 Requires Node.js 22.12+ and npm.
 
@@ -16,6 +16,8 @@ Requires Node.js 22.12+ and npm.
 npm install
 npm run dev
 ```
+
+For the persistent synthetic import API and worker, follow [local runtime setup](docs/local-import-runtime.md), then run `npm run dev:local`. This starts the frontend, API and independent worker after migrations.
 
 Open the local URL printed by Vite. The landing page runs without Supabase credentials.
 
