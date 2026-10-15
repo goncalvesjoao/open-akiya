@@ -1,3 +1,4 @@
+import { createLocationSearch } from './location-search'
 import { ImportRuntime } from './runtime'
 import { syntheticAdapter } from './adapter'
 import {
@@ -19,9 +20,15 @@ const runtime = new ImportRuntime(process.argv[2], 300, {
     ]),
   ],
 })
+const searchLocations = createLocationSearch(
+  process.env.OPEN_AKIYA_LOCATION_SEARCH_URL,
+)
 process.parentPort.on('message', async ({ data }: { data: WorkerRequest }) => {
   try {
-    const result = await runtime.dispatch(data.operation, data.input)
+    const result =
+      data.operation === 'searchLocations'
+        ? await searchLocations(data.input)
+        : await runtime.dispatch(data.operation, data.input)
     process.parentPort.postMessage({ id: data.id, result })
   } catch (error) {
     process.parentPort.postMessage({ id: data.id, error: safeError(error) })

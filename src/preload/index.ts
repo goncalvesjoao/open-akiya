@@ -11,6 +11,7 @@ async function invoke<T>(channel: string, input: unknown): Promise<T> {
   return reply.result as T
 }
 const api: DesktopAPI = {
+  searchLocations: (query) => invoke('akiya:searchLocations', query),
   createImportRequest: (input) => invoke('akiya:createImportRequest', input),
   inspectImportRequest: (id) => invoke('akiya:inspectImportRequest', id),
   inspectImport: (id) => invoke('akiya:inspectImport', id),
