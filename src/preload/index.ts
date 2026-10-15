@@ -15,6 +15,7 @@ const api: DesktopAPI = {
   inspectImportRequest: (id) => invoke('akiya:inspectImportRequest', id),
   inspectImport: (id) => invoke('akiya:inspectImport', id),
   cancelImport: (id) => invoke('akiya:cancelImport', id),
+  cancelImportRequest: (id) => invoke('akiya:cancelImportRequest', id),
   listImports: (input) => invoke('akiya:listImports', input),
   areaResults: (query) => invoke('akiya:areaResults', query),
 }

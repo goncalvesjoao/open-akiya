@@ -11,6 +11,7 @@ it('exposes only approved domain operations through named IPC channels', async (
   expect(Object.keys(api).sort()).toEqual([
     'areaResults',
     'cancelImport',
+    'cancelImportRequest',
     'createImportRequest',
     'inspectImport',
     'inspectImportRequest',
@@ -28,6 +29,11 @@ it('exposes only approved domain operations through named IPC channels', async (
   expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
     'akiya:createImportRequest',
     input,
+  )
+  await api.cancelImportRequest('request-1')
+  expect(electron.ipcRenderer.invoke).toHaveBeenLastCalledWith(
+    'akiya:cancelImportRequest',
+    'request-1',
   )
   electron.ipcRenderer.invoke.mockResolvedValue({
     error: {

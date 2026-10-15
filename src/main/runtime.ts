@@ -131,9 +131,16 @@ export class ImportRuntime {
     return JSON.parse(String(row.data))
   }
   private save(job: ImportJob) {
+    // Another worker may have persisted cancellation after this snapshot was read.
     this.db
-      .prepare('UPDATE import_jobs_v2 SET state=?,data=? WHERE id=?')
-      .run(job.state, JSON.stringify(job), job.id)
+      .prepare(
+        `UPDATE import_jobs_v2 SET state=?,data=CASE
+        WHEN json_extract(data,'$.cancelRequestedAt') IS NOT NULL THEN
+          json_set(?, '$.cancelRequestedAt', json_extract(data,'$.cancelRequestedAt'),
+            '$.reasons', json_extract(data,'$.reasons'))
+        ELSE ? END WHERE id=?`,
+      )
+      .run(job.state, JSON.stringify(job), JSON.stringify(job), job.id)
     const row = this.db
       .prepare('SELECT data FROM import_requests_v2 WHERE job_id=?')
       .get(job.id)
@@ -272,6 +279,8 @@ export class ImportRuntime {
       const job = this.inspect(input)
       if (!active(job)) return job
       job.cancelRequestedAt ??= this.time()
+      if (!job.reasons.includes('USER_CANCELLED'))
+        job.reasons.push('USER_CANCELLED')
       if (job.state === 'queued') {
         job.state = 'cancelled'
         job.stage = 'finished'
@@ -648,6 +657,7 @@ export class ImportRuntime {
             const evidence = await adapter.fetchDetail(candidate, context)
             this.ensure(job)
             const normalized = adapter.normalize(evidence)
+            this.ensure(job)
             job.stage = 'saving'
             this.save(job)
             this.transaction(() => {
@@ -763,6 +773,11 @@ export class ImportRuntime {
         return this.inspect(input)
       case 'cancelImport':
         return this.cancel(input)
+      case 'cancelImportRequest': {
+        const request = this.inspectRequest(input)
+        this.cancel(request.jobIds[0])
+        return this.inspectRequest(request.id)
+      }
       case 'listImports':
         return this.list(input)
       case 'areaResults':
