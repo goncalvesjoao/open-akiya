@@ -24,10 +24,25 @@ function money(value: number | null) {
       : `¥${value.toLocaleString('en-US')}`
 }
 
+function LocationUncertainty({ listing }: { listing: ListingProjection }) {
+  if (listing.location.kind !== 'unverified') return null
+  return (
+    <span className="location-uncertainty">
+      Location unverified ·{' '}
+      {listing.location.precision === 'approximate'
+        ? 'Approximate source position'
+        : 'Source position; accuracy unknown'}
+      . True distance and radius membership are uncertain. Shown because the
+      source point is inside the selected circle.
+    </span>
+  )
+}
+
 function ListingDetails({ listing }: { listing: ListingProjection }) {
   return (
     <section aria-label="Listing details" className="listing-details">
       <h3>{listingTitle(listing)}</h3>
+      <LocationUncertainty listing={listing} />
       <p>
         Offer: {listing.id} · {listing.transactionType} · Availability:{' '}
         {listing.availability.replaceAll('_', ' ')}
@@ -131,13 +146,27 @@ function MapCanvas({
       interactive: false,
     }).addTo(layers)
     for (const listing of listings) {
-      if (listing.location.kind !== 'verified') continue
+      if (
+        listing.location.kind !== 'verified' &&
+        listing.location.kind !== 'unverified'
+      )
+        continue
+      const uncertain = listing.location.kind === 'unverified'
       const { latitude, longitude } = listing.location.point
       const button = document.createElement('button')
       button.type = 'button'
-      button.className = 'listing-pin'
-      button.textContent = listing.transactionType === 'rent' ? 'R' : 'S'
-      button.setAttribute('aria-label', `Pin: ${listingTitle(listing)}`)
+      button.className = uncertain
+        ? 'listing-pin listing-pin-unverified'
+        : 'listing-pin'
+      button.textContent = uncertain
+        ? '?'
+        : listing.transactionType === 'rent'
+          ? 'R'
+          : 'S'
+      button.setAttribute(
+        'aria-label',
+        `Pin: ${listingTitle(listing)}${uncertain ? ' · Location unverified' : ''}`,
+      )
       button.setAttribute('aria-pressed', String(listing.id === selectedId))
       L.DomEvent.disableClickPropagation(button)
       button.addEventListener('click', () => onSelect(listing.id))
@@ -321,6 +350,7 @@ export default function AreaMap() {
                 >
                   {listingTitle(listing)}
                 </button>
+                <LocationUncertainty listing={listing} />
                 {listing.location.kind === 'verified' && (
                   <span>
                     {' '}

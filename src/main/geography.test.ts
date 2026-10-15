@@ -2,7 +2,7 @@
 import { expect, test, beforeEach, afterEach } from 'vitest'
 import { ImportRuntime } from './runtime'
 import { syntheticAdapter } from './adapter'
-import { fixtures } from './fixtures'
+import { fixtures, uncertainFixtures } from './fixtures'
 import { initialArea } from '../shared/geography'
 import type { AreaQuery } from '../shared/listings'
 let runtime: ImportRuntime
@@ -141,5 +141,35 @@ test('accepts WGS84 extremes and the maximum radius without clamping', async () 
     const result = await queryListings({ area, showUnavailable: false })
     expect(result.area).toEqual(area)
     expect(result.listings).toEqual([])
+  }
+})
+
+test('returns both uncertain source-point variants as candidates without claiming true radius membership', async () => {
+  const uncertain = uncertainFixtures.slice(0, 2)
+  const local = new ImportRuntime(':memory:', 0, {
+    adapters: [syntheticAdapter(0, uncertain)],
+  })
+  try {
+    const request = local.createRequest({
+      area: initialArea,
+      intent: 'import',
+      idempotencyKey: 'uncertain',
+    })
+    await expect
+      .poll(() => local.inspect(request.jobIds[0]).state)
+      .toBe('succeeded')
+    expect(
+      local
+        .results({ area: initialArea, showUnavailable: false })
+        .listings.map((listing) => listing.sourceRefs[0].externalId),
+    ).toEqual(['unverified-1', 'approximate-1'])
+    expect(
+      local.results({
+        area: { center: { latitude: 36, longitude: 135 }, radiusKm: 5 },
+        showUnavailable: false,
+      }).listings,
+    ).toEqual([])
+  } finally {
+    await local.close()
   }
 })

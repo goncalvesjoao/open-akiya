@@ -2,6 +2,9 @@ import type { ListingProjection } from '../../../shared/listings'
 
 // Authored English labels for fictional fixtures, not source translations.
 const sampleTitles: Record<string, string> = {
+  'sample-unverified-1': 'Unverified sample listing',
+  'sample-approximate-1': 'Approximate sample listing',
+  'sample-unverified-unavailable-1': 'Unavailable unverified sample listing',
   'sample-sale-1': 'Sample sale listing',
   'sample-rent-1': 'Sample rental listing',
   'sample-unknown-1': 'Sample listing with unknown price',

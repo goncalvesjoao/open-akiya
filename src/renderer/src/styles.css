@@ -138,3 +138,12 @@ a {
     gap: 12px;
   }
 }
+
+.synthetic-map .listing-pin-unverified {
+  background: #805209;
+  border: 2px dashed #fff;
+  border-radius: 4px;
+}
+.location-uncertainty {
+  color: #704709;
+}

@@ -1,8 +1,12 @@
 import { ImportRuntime } from './runtime'
+import { syntheticAdapter } from './adapter'
+import { fixtures, uncertainFixtures } from './fixtures'
 import { safeError } from './errors'
 import type { WorkerRequest } from '../shared/desktop'
 
-const runtime = new ImportRuntime(process.argv[2])
+const runtime = new ImportRuntime(process.argv[2], 300, {
+  adapters: [syntheticAdapter(300, [fixtures[0], ...uncertainFixtures])],
+})
 process.parentPort.on('message', async ({ data }: { data: WorkerRequest }) => {
   try {
     const result = await runtime.dispatch(data.operation, data.input)
