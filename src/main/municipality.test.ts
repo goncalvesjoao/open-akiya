@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { expect, test } from 'vitest'
 import { ImportRuntime } from './runtime'
+import { testClock } from './test-clock'
 import { syntheticAdapter } from './adapter'
 import { fixtures } from './fixtures'
 import { initialArea } from '../shared/geography'
@@ -32,6 +33,7 @@ test('includes intersecting municipality offers independently of their represent
     },
   }))
   const runtime = new ImportRuntime(':memory:', 0, {
+    ...testClock(),
     adapters: [syntheticAdapter(0, offers)],
   })
   try {
@@ -99,6 +101,7 @@ test('routes a source point documented as a municipal office into its municipali
   )!
   expect(offer.location.kind).toBe('unverified')
   const runtime = new ImportRuntime(':memory:', 0, {
+    ...testClock(),
     adapters: [syntheticAdapter(0, [offer])],
   })
   try {

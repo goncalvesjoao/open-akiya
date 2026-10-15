@@ -28,10 +28,45 @@ New request/job/lease tables are additive (`*_v2`); existing listing IDs and sav
 The current app imports fictional sample listings only. The base request/job contracts are implemented; parent #5 has additional child-ticket acceptance work. Outstanding work includes:
 
 - Live source transport, robust field-patch/authoritative-null merging, invalid-observation handling and independent multi-source availability.
-- Source request budgets, rate limiting, retries, per-source outcomes, coverage/checkpoints, fair detail refresh allocation and freshness/containment reuse.
+- Coverage/checkpoint reuse, fair detail refresh allocation and freshness/containment reuse.
 - Independent request intent, shared-work cancellation, manual-refresh follow-ups, bounded continuation and expired-cursor recovery.
 - Unverified pins, municipality geometry and summaries, unknown-location associations and address/place lookup.
 - Permitted Tsubata integration, geographic-reference and identity validation, residential eligibility and a bounded live pilot.
 - Windows/macOS validation, installer signing/notarization, release icons and published installers.
 
 Worker and React tests use temporary databases and controlled inputs. Automated verification must not make live source requests. Integrated Electron checks require a graphical session and should cover preload isolation, worker IPC, map results, window lifecycle and restart persistence.
+
+## Bounded synthetic execution
+
+The worker-owned `AdapterContext.request` transport validates HTTPS hosts and
+redirect destinations, charges every attempt before dispatch, serializes requests,
+and persists host pacing deadlines. Default job limits are 10 discovery attempts
+and 100 detail attempts across all sources, including retries and redirect hops.
+Worker configuration can set positive integer `discoveryLimit`/`detailLimit`;
+accepted limits are saved with each job. `minimumIntervalMs` can raise the default
+two-second request interval. Synthetic adapters use the same controls and a
+no-network success transport; API fixtures inject deterministic response transport,
+clock and abort-aware waits. A future live transport must honor its AbortSignal
+and return manual redirect responses through this boundary.
+
+Requests time out after 30 seconds by default. Transient transport failures,
+timeouts, HTTP 429 and HTTP 5xx receive at most two retries with bounded exponential
+backoff. Retry-After seconds and HTTP dates can extend the wait; a requested wait
+over one minute terminates that source instead of retrying early. Redirect chains
+allow at most five hops. Sanitized outcomes distinguish `TIMEOUT`, `RATE_LIMITED`,
+`SOURCE_BLOCKED`, `TRANSPORT_ERROR`, `PARSE_ERROR`, `CONFIGURATION_ERROR`, rejected
+source URLs and `BUDGET_EXHAUSTED`. Cancellation interrupts waits and transports.
+
+Source failures do not prevent remaining enabled sources from running. Successful
+empty discovery is a success; errors without useful saved work are failures;
+useful saved work, saved resumable traversal progress or a mix of successful and failed sources produces partial
+results. Rejected details and discovery limitations never certify complete source
+coverage. Existing listings and their successful-check times survive failed
+checks. Job inspection reports these outcomes while area results retain
+conservative unknown coverage; no discovery checkpoint is advanced here.
+
+Private SQLite source traversal records preserve candidates, cursors, completed
+identities, source/version/scope evidence and source outcomes. Retry deadlines and
+host pacing survive restart, alongside the existing durable current-job progress.
+These records are foundations for #6; this slice adds no continuation, freshness
+reuse, date stopping, checkpoint advancement or refresh allocation policy.

@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ImportRuntime } from './runtime'
+import { testClock } from './test-clock'
 import { syntheticAdapter } from './adapter'
 import { fixtures, uncertainFixtures } from './fixtures'
 import { initialArea } from '../shared/geography'
@@ -11,6 +12,7 @@ import type { AreaQuery } from '../shared/listings'
 let runtime: ImportRuntime
 beforeEach(async () => {
   runtime = new ImportRuntime(':memory:', 0, {
+    ...testClock(),
     adapters: [syntheticAdapter(0, fixtures)],
   })
   for (const area of [
@@ -150,6 +152,7 @@ test('accepts WGS84 extremes and the maximum radius without clamping', async () 
 test('returns both uncertain source-point variants as candidates without claiming true radius membership', async () => {
   const uncertain = uncertainFixtures.slice(0, 2)
   const local = new ImportRuntime(':memory:', 0, {
+    ...testClock(),
     adapters: [syntheticAdapter(0, uncertain)],
   })
   try {
@@ -182,6 +185,7 @@ test('returns only unknown candidates with saved intersecting discovery evidence
   const directory = mkdtempSync(join(tmpdir(), 'akiya-unknown-query-'))
   const database = join(directory, 'listings.sqlite')
   let local = new ImportRuntime(database, 0, {
+    ...testClock(),
     adapters: [syntheticAdapter(0, unknownFixtures)],
   })
   try {
@@ -200,6 +204,7 @@ test('returns only unknown candidates with saved intersecting discovery evidence
     }
     await local.close()
     local = new ImportRuntime(database, 0, {
+      ...testClock(),
       adapters: [syntheticAdapter(0, unknownFixtures)],
     })
     // The precise outside listing was saved, but its broad discovery scope

@@ -5,17 +5,17 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ImportRuntime } from './runtime'
+import { testClock } from './test-clock'
 import { syntheticAdapter, type SourceAdapter } from './adapter'
 import { initialArea } from '../shared/geography'
 
 const directory = mkdtempSync(join(tmpdir(), 'akiya-runtime-'))
 const runtimes: ImportRuntime[] = []
 function open(name: string, delay = 1, adapters?: SourceAdapter[]) {
-  const runtime = new ImportRuntime(
-    join(directory, name),
-    delay,
-    adapters ? { adapters } : {},
-  )
+  const runtime = new ImportRuntime(join(directory, name), delay, {
+    ...testClock(),
+    ...(adapters ? { adapters } : {}),
+  })
   runtimes.push(runtime)
   return runtime
 }
