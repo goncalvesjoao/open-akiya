@@ -53,6 +53,7 @@ it('registered handlers reject foreign contents, child frames and changed applic
     'akiya:inspectImport',
     'akiya:inspectImportRequest',
     'akiya:listImports',
+    'akiya:searchLocations',
   ])
 })
 it('returns safe structured errors without exposing private worker failures', async () => {

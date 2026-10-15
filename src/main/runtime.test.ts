@@ -328,10 +328,10 @@ test.each(['floorAreaM2', 'landAreaM2'] as const)(
     const rejected = runtime.createRequest(input)
     await expect
       .poll(() => runtime.inspect(rejected.jobIds[0]).state)
-      .toBe('failed')
+      .toBe('partial')
     expect(runtime.inspect(rejected.jobIds[0])).toMatchObject({
-      counts: { checked: 0, added: 0, updated: 0, unchanged: 0 },
-      error: { code: 'INVALID_REQUEST' },
+      counts: { checked: 1, rejected: 1, added: 0, updated: 0, unchanged: 0 },
+      sources: [{ error: { code: 'INVALID_REQUEST' } }],
     })
     expect(runtime.results(query).listings).toEqual([])
     await runtime.close()
@@ -548,4 +548,31 @@ test('remote request cancellation during delayed detail preserves the previous c
   await completed(reopened, next.jobIds[0])
   expect(reopened.inspect(stopped.id)).toEqual(stopped)
   expect(reopened.results(query).listings).toEqual(saved)
+})
+
+test('rejects new verified observations with blank verification evidence', async () => {
+  const base = syntheticAdapter(0)
+  const adapter: SourceAdapter = {
+    ...base,
+    normalize(evidence) {
+      const result = base.normalize(evidence)
+      if (
+        result.kind === 'accepted' &&
+        result.observation.fields.location?.kind === 'verified'
+      ) {
+        result.observation.fields.location.evidence = '   '
+      }
+      return result
+    },
+  }
+  const runtime = open('empty-location-evidence.sqlite', 0, [adapter])
+  const request = runtime.createRequest(input)
+  await expect
+    .poll(() => runtime.inspect(request.jobIds[0]).state)
+    .toBe('partial')
+  expect(runtime.inspect(request.jobIds[0])).toMatchObject({
+    counts: { added: 0, checked: 1, rejected: 1 },
+    sources: [{ state: 'partial', error: { code: 'INVALID_REQUEST' } }],
+  })
+  expect(runtime.results(query).listings).toEqual([])
 })

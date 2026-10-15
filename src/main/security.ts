@@ -13,6 +13,7 @@ const operations: (keyof DesktopAPI)[] = [
   'cancelImportRequest',
   'listImports',
   'areaResults',
+  'searchLocations',
 ]
 
 export function registerDomainHandlers(

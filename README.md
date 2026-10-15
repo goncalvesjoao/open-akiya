@@ -4,7 +4,7 @@ Discover Japan’s vacant homes, freely.
 
 Open Akiya is a local desktop application built with Electron, React and TypeScript. A separate utility process runs imports and owns a SQLite database on your computer. Docker, Supabase and database credentials are unnecessary.
 
-The current app imports **fictional sample listings only**. Select an area, choose **Import sample listings**, inspect progress, and explore saved results on the map. Real sources, address lookup, freshness policies, manual refresh and continuation remain planned; see the [implementation plan](docs/implementation-plan.md).
+The current app imports **fictional sample listings only**. Select an area, choose **Import sample listings**, inspect progress, and explore saved results on the map. Optional [address/place lookup](docs/location-search.md) selects the area center through a self-hosted Nominatim provider. Real listing sources, freshness policies, manual refresh and continuation remain planned; see the [implementation plan](docs/implementation-plan.md).
 
 ## Installing and launching
 

@@ -157,3 +157,18 @@ a {
 .listing-results summary {
   cursor: pointer;
 }
+
+.location-search p,
+.location-search button {
+  overflow-wrap: anywhere;
+}
+.location-search ul {
+  padding-left: 20px;
+}
+.location-search li {
+  margin-block: 8px;
+}
+.location-search button {
+  max-width: 100%;
+  text-align: left;
+}

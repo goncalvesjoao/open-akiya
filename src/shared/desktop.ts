@@ -1,3 +1,4 @@
+import type { LocationSearchResults } from './location-search'
 import type { AreaQuery, AreaResults, Coverage, SelectedArea } from './listings'
 
 export type JobState =
@@ -62,6 +63,7 @@ export type CreateImport = {
   idempotencyKey: string
 }
 export type DesktopAPI = {
+  searchLocations(query: string): Promise<LocationSearchResults>
   createImportRequest(input: CreateImport): Promise<ImportRequest>
   inspectImportRequest(id: string): Promise<ImportRequest>
   inspectImport(id: string): Promise<ImportJob>
