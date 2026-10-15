@@ -6,7 +6,8 @@ import type {
   SelectedArea,
 } from '../shared/listings'
 import { distanceMetres } from '../shared/geography'
-import { fixtures } from './fixtures'
+import { fixtures, municipalitySourcePointEvidence } from './fixtures'
+import { municipalityReference } from './municipalities'
 
 export type AdapterCapabilities = {
   sourceId: string
@@ -93,6 +94,17 @@ export function syntheticAdapter(
   delayMs = 300,
   offers: ListingProjection[] = [fixtures[0]],
 ): SourceAdapter {
+  offers = offers.map((offer): ListingProjection => {
+    const municipalityId =
+      municipalitySourcePointEvidence[offer.sourceRefs[0].externalId]
+    return municipalityId && offer.sourceRefs[0].sourceId === 'fixture'
+      ? {
+          ...offer,
+          municipalityId,
+          location: { kind: 'municipality', municipalityId },
+        }
+      : offer
+  })
   const listing = offers[0]
   const source = listing.sourceRefs[0]
   return {
@@ -107,12 +119,13 @@ export function syntheticAdapter(
     },
     async discover({ area }, context) {
       await context.request('discovery', 'https://example.invalid/discovery')
-      const inside = offers.filter(
-        (offer) =>
-          (offer.location.kind === 'verified' ||
-            offer.location.kind === 'unverified') &&
-          distanceMetres(area.center, offer.location.point) <=
-            area.radiusKm * 1000 + 1e-8,
+      const inside = offers.filter((offer) =>
+        offer.location.kind === 'municipality'
+          ? Boolean(municipalityReference(offer.location.municipalityId, area))
+          : (offer.location.kind === 'verified' ||
+              offer.location.kind === 'unverified') &&
+            distanceMetres(area.center, offer.location.point) <=
+              area.radiusKm * 1000 + 1e-8,
       )
       return {
         candidates: inside.map((offer) => ({
@@ -120,7 +133,7 @@ export function syntheticAdapter(
           transactionType: offer.transactionType,
           url: offer.primarySourceUrl,
           location: offer.location,
-          municipalityId: null,
+          municipalityId: offer.municipalityId,
           publishedAt: null,
           modifiedAt: null,
           relevance:

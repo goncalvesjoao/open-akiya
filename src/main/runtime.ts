@@ -18,6 +18,8 @@ import {
 } from './adapter'
 import { invalid, LocalApiError, safeError } from './errors'
 import { listingProjection } from './projection'
+import { municipalityReference } from './municipalities'
+import type { MunicipalityGroup } from '../shared/listings'
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -294,19 +296,41 @@ export class ImportRuntime {
       .prepare('SELECT data FROM listings')
       .all()
       .map((row) => listingProjection(JSON.parse(String(row.data))))
+    const visible = listings.filter(
+      (listing) =>
+        (showUnavailable || listing.availability !== 'unavailable') &&
+        (listing.location.kind === 'municipality'
+          ? Boolean(
+              municipalityReference(listing.location.municipalityId, area),
+            )
+          : (listing.location.kind === 'verified' ||
+              listing.location.kind === 'unverified') &&
+            distanceMetres(area.center, listing.location.point) <=
+              area.radiusKm * 1000 + 1e-8),
+    )
+    const groups = new Map<string, MunicipalityGroup>()
+    for (const listing of visible) {
+      if (listing.location.kind !== 'municipality') continue
+      const municipalityId = listing.location.municipalityId
+      const reference = municipalityReference(municipalityId, area)!
+      const group = groups.get(municipalityId) ?? {
+        municipalityId,
+        nameJa: listing.municipalityNameJa ?? municipalityId,
+        listingIds: [],
+        count: 0,
+        representativePoint: reference.representativePoint,
+        representativePointProvenance: reference.representativePointProvenance,
+      }
+      group.listingIds.push(listing.id)
+      group.count = group.listingIds.length
+      groups.set(municipalityId, group)
+    }
     return {
       area,
       showUnavailable,
       mode: 'synthetic',
-      listings: listings.filter(
-        (listing) =>
-          (showUnavailable || listing.availability !== 'unavailable') &&
-          (listing.location.kind === 'verified' ||
-            listing.location.kind === 'unverified') &&
-          distanceMetres(area.center, listing.location.point) <=
-            area.radiusKm * 1000 + 1e-8,
-      ),
-      municipalityGroups: [],
+      listings: visible,
+      municipalityGroups: [...groups.values()],
       coverage: coverage(null),
       generatedAt: this.time(),
     }
