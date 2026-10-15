@@ -73,6 +73,7 @@ export class ImportRuntime {
     this.db
       .exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS import_jobs_v2 (id TEXT PRIMARY KEY, state TEXT NOT NULL, data TEXT NOT NULL, scope TEXT NOT NULL, progress TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS active_import_jobs_v2 ON import_jobs_v2(state) WHERE state IN ('queued','running');
       CREATE TABLE IF NOT EXISTS import_requests_v2 (id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, semantic TEXT NOT NULL, job_id TEXT NOT NULL REFERENCES import_jobs_v2(id), data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS executor_v2 (singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, external_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(source_id,external_id));
@@ -93,9 +94,11 @@ export class ImportRuntime {
       throw error
     }
   }
-  private allJobs(): ImportJob[] {
+  private activeJobs(): ImportJob[] {
     return this.db
-      .prepare('SELECT data FROM import_jobs_v2 ORDER BY rowid')
+      .prepare(
+        "SELECT data FROM import_jobs_v2 WHERE state IN ('queued','running') ORDER BY rowid",
+      )
       .all()
       .map((row) => JSON.parse(String(row.data)))
   }
@@ -106,7 +109,7 @@ export class ImportRuntime {
       Object.keys(input).length !== 1
     )
       invalid('Invalid active-job query')
-    return { jobs: this.allJobs().filter(active) }
+    return { jobs: this.activeJobs() }
   }
   inspect(input: unknown): ImportJob {
     const row = this.db
@@ -308,26 +311,23 @@ export class ImportRuntime {
       generatedAt: this.time(),
     }
   }
-  private schedule() {
-    if (this.stopping || this.executing || this.timer) return
+  private schedule(delayMs = 25) {
+    if (this.stopping || this.executing) return
+    clearTimeout(this.timer)
     this.timer = setTimeout(() => {
       this.timer = undefined
       void this.run()
-    }, 25)
+    }, delayMs)
   }
   private claim(): ImportJob | undefined {
+    // Idle workers only read the small active index. Recheck under the write
+    // transaction before claiming: another process may win after these reads.
+    if (!this.nextJob() || this.leasedElsewhere()) return
     return this.transaction(() => {
-      const lease = this.db
-        .prepare('SELECT owner,expires FROM executor_v2 WHERE singleton=1')
-        .get()
-      if (
-        lease &&
-        lease.owner !== this.owner &&
-        Number(lease.expires) > this.now()
-      )
-        return
-      const job = this.allJobs().find(active)
-      if (!job) return
+      if (this.leasedElsewhere()) return
+      const row = this.nextJob()
+      if (!row) return
+      const job: ImportJob = JSON.parse(String(row.data))
       this.db
         .prepare(
           'INSERT INTO executor_v2 VALUES (1,?,?) ON CONFLICT(singleton) DO UPDATE SET owner=excluded.owner,expires=excluded.expires',
@@ -338,6 +338,23 @@ export class ImportRuntime {
       this.save(job)
       return job
     })
+  }
+  private nextJob() {
+    return this.db
+      .prepare(
+        "SELECT data FROM import_jobs_v2 WHERE state IN ('queued','running') ORDER BY rowid LIMIT 1",
+      )
+      .get()
+  }
+  private leasedElsewhere(): boolean {
+    const lease = this.db
+      .prepare('SELECT owner,expires FROM executor_v2 WHERE singleton=1')
+      .get()
+    return (
+      !!lease &&
+      lease.owner !== this.owner &&
+      Number(lease.expires) > this.now()
+    )
   }
   private owned(): boolean {
     const row = this.db
@@ -514,7 +531,9 @@ export class ImportRuntime {
     if (this.stopping || this.executing) return
     const job = this.claim()
     if (!job) {
-      this.schedule()
+      // Poll slowly for work submitted by another process or an expired lease.
+      // Local submissions interrupt this timer and wake execution promptly.
+      this.schedule(1000)
       return
     }
     this.executing = true

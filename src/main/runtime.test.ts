@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { afterEach, expect, test } from 'vitest'
+import { afterEach, expect, test, vi } from 'vitest'
+import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -348,3 +349,68 @@ test.each(['floorAreaM2', 'landAreaM2'] as const)(
     expect(reopened.results(query).listings[0][field]).toBe(25.5)
   },
 )
+
+test('idle workers avoid write transactions and retained terminal payloads, but wake for local and external requests', async () => {
+  vi.useFakeTimers()
+  const path = join(directory, 'idle.sqlite')
+  const runtime = open('idle.sqlite')
+  const database = new DatabaseSync(path)
+  // Retained terminal data is irrelevant to active listing and queue execution.
+  const insert = database.prepare(
+    'INSERT INTO import_jobs_v2 VALUES (?,?,?,?,?)',
+  )
+  for (let index = 0; index < 1000; index++)
+    insert.run(`history-${index}`, 'succeeded', 'not active JSON', '{}', '{}')
+  const exec = vi.spyOn(DatabaseSync.prototype, 'exec')
+  const prepare = vi.spyOn(DatabaseSync.prototype, 'prepare')
+  try {
+    await vi.advanceTimersByTimeAsync(10000)
+    expect(
+      exec.mock.calls.filter(([sql]) => sql === 'BEGIN IMMEDIATE'),
+    ).toHaveLength(0)
+    expect(prepare.mock.calls.length).toBeLessThanOrEqual(12)
+    expect(runtime.list({ state: 'active' }).jobs).toEqual([])
+    const local = runtime.createRequest(input)
+    await vi.advanceTimersByTimeAsync(100)
+    expect(runtime.inspect(local.jobIds[0]).state).toBe('succeeded')
+
+    // Another process can enqueue and quit while this runtime is idle.
+    const writer = open('idle.sqlite')
+    const external = writer.createRequest({
+      ...input,
+      idempotencyKey: 'external',
+    })
+    await writer.close()
+    await vi.advanceTimersByTimeAsync(1100)
+    expect(runtime.inspect(external.jobIds[0]).state).toBe('succeeded')
+  } finally {
+    exec.mockRestore()
+    prepare.mockRestore()
+    database.close()
+    await runtime.close()
+    vi.useRealTimers()
+  }
+})
+
+test('an idle worker waits for a foreign lease to expire before recovering saved work', async () => {
+  vi.useFakeTimers()
+  const writer = open('expired-lease.sqlite')
+  const request = writer.createRequest(input)
+  await writer.close()
+  const database = new DatabaseSync(join(directory, 'expired-lease.sqlite'))
+  database
+    .prepare('INSERT INTO executor_v2 VALUES (1,?,?)')
+    .run('other-process', Date.now() + 500)
+  database.close()
+  const runtime = open('expired-lease.sqlite')
+  try {
+    await vi.advanceTimersByTimeAsync(400)
+    expect(runtime.inspect(request.jobIds[0]).state).toBe('queued')
+    await vi.advanceTimersByTimeAsync(700)
+    expect(runtime.inspect(request.jobIds[0]).state).toBe('succeeded')
+    expect(runtime.results(query).listings).toHaveLength(1)
+  } finally {
+    await runtime.close()
+    vi.useRealTimers()
+  }
+})
