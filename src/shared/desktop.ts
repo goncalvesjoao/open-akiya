@@ -68,6 +68,7 @@ export type DesktopAPI = {
   inspectImportRequest(id: string): Promise<ImportRequest>
   inspectImport(id: string): Promise<ImportJob>
   cancelImport(id: string): Promise<ImportJob>
+  cancelImportRequest(id: string): Promise<ImportRequest>
   listImports(input: { state: 'active' }): Promise<{ jobs: ImportJob[] }>
   areaResults(query: AreaQuery): Promise<AreaResults>
 }

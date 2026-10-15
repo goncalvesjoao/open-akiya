@@ -465,6 +465,141 @@ test('an idle worker waits for a foreign lease to expire before recovering saved
   }
 })
 
+test('request cancellation stops queued work without requests and leaves the queue usable', async () => {
+  const runtime = open('cancel-request.sqlite')
+  await expect(
+    runtime.dispatch('cancelImportRequest', 'missing'),
+  ).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  await expect(
+    runtime.dispatch('cancelImportRequest', {}),
+  ).rejects.toMatchObject({ code: 'INVALID_REQUEST' })
+  const request = runtime.createRequest(input)
+  const cancelled = await runtime.dispatch('cancelImportRequest', request.id)
+  expect(cancelled).toMatchObject({
+    state: 'cancelled',
+    finishedAt: expect.any(String),
+  })
+  expect(runtime.inspect(request.jobIds[0])).toMatchObject({
+    state: 'cancelled',
+    stage: 'finished',
+    reasons: ['USER_CANCELLED'],
+    budget: { discoveryUsed: 0, detailUsed: 0 },
+  })
+  expect(await runtime.dispatch('cancelImportRequest', request.id)).toEqual(
+    cancelled,
+  )
+  const next = runtime.createRequest({ ...input, idempotencyKey: 'next' })
+  const done = await completed(runtime, next.jobIds[0])
+  expect(runtime.cancel(done.id)).toEqual(done)
+  expect(await runtime.dispatch('cancelImportRequest', next.id)).toEqual(
+    runtime.inspectRequest(next.id),
+  )
+})
+
+test('cancellation at the save boundary cannot erase intent or commit an unchecked offer', async () => {
+  const base = syntheticAdapter(1)
+  const runtime = open('cancel-boundary.sqlite', 1, [
+    {
+      ...base,
+      normalize(evidence) {
+        runtime.cancel(request.jobIds[0])
+        return base.normalize(evidence)
+      },
+    },
+  ])
+  const request = runtime.createRequest(input)
+  await expect
+    .poll(() => runtime.inspect(request.jobIds[0]).state)
+    .toBe('cancelled')
+  expect(runtime.inspect(request.jobIds[0])).toMatchObject({
+    cancelRequestedAt: expect.any(String),
+    counts: { checked: 0, added: 0 },
+    budget: { discoveryUsed: 1, detailUsed: 1 },
+    reasons: ['USER_CANCELLED'],
+  })
+  expect(runtime.results(query).listings).toEqual([])
+})
+
+test('remote request cancellation during delayed detail preserves the previous commit and prevents further attempts after restart', async () => {
+  const base = syntheticAdapter(1)
+  let release: (() => void) | undefined
+  let entered = false
+  const adapter: SourceAdapter = {
+    ...base,
+    async discover(input, context) {
+      const page = await base.discover(input, context)
+      if (!page.candidates.length) return page
+      return {
+        ...page,
+        candidates: [
+          page.candidates[0],
+          ...['two', 'three'].map((externalId) => ({
+            ...page.candidates[0],
+            externalId,
+            url: `https://example.invalid/offers/${externalId}`,
+          })),
+        ],
+      }
+    },
+    async fetchDetail(candidate, context) {
+      const evidence = await base.fetchDetail(candidate, context)
+      if (candidate.externalId === 'two') {
+        entered = true
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+      }
+      return evidence
+    },
+  }
+  const runtime = open('cancel-delayed.sqlite', 1, [adapter])
+  const request = runtime.createRequest(input)
+  await expect.poll(() => entered).toBe(true)
+  const saved = runtime.results(query).listings
+  const remote = open('cancel-delayed.sqlite', 1, [adapter])
+  try {
+    expect(
+      await remote.dispatch('cancelImportRequest', request.id),
+    ).toMatchObject({ state: 'running', finishedAt: null })
+    const intent = remote.inspect(request.jobIds[0])
+    expect(intent).toMatchObject({
+      cancelRequestedAt: expect.any(String),
+      counts: { checked: 1, added: 1 },
+      budget: { discoveryUsed: 1, detailUsed: 2 },
+    })
+    expect(remote.cancel(intent.id)).toEqual(intent)
+  } finally {
+    release?.()
+  }
+  await expect
+    .poll(() => runtime.inspect(request.jobIds[0]).state)
+    .toBe('cancelled')
+  const stopped = runtime.inspect(request.jobIds[0])
+  expect(stopped).toMatchObject({
+    counts: { checked: 1, added: 1 },
+    budget: { discoveryUsed: 1, detailUsed: 2 },
+    reasons: ['USER_CANCELLED'],
+    sources: [{ state: 'cancelled' }],
+  })
+  expect(runtime.inspectRequest(request.id)).toMatchObject({
+    state: 'cancelled',
+    finishedAt: stopped.finishedAt,
+  })
+  expect(runtime.results(query).listings).toEqual(saved)
+  await runtime.close()
+  await remote.close()
+  const reopened = open('cancel-delayed.sqlite', 1, [adapter])
+  const next = reopened.createRequest({
+    ...input,
+    idempotencyKey: 'after-restart',
+    area: { ...initialArea, center: { latitude: 36, longitude: 136 } },
+  })
+  // The empty-area job must complete without replaying the cancelled job.
+  await completed(reopened, next.jobIds[0])
+  expect(reopened.inspect(stopped.id)).toEqual(stopped)
+  expect(reopened.results(query).listings).toEqual(saved)
+})
+
 test('rejects new verified observations with blank verification evidence', async () => {
   const base = syntheticAdapter(0)
   const adapter: SourceAdapter = {
@@ -491,6 +626,7 @@ test('rejects new verified observations with blank verification evidence', async
   expect(runtime.inspect(request.jobIds[0])).toMatchObject({
     counts: { added: 0, checked: 1, rejected: 1 },
     error: { code: 'INVALID_REQUEST' },
+    sources: [{ state: 'failed', error: { code: 'INVALID_REQUEST' } }],
   })
   expect(runtime.results(query).listings).toEqual([])
 })

@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, expect, test } from 'vitest'
 import { ImportRuntime } from './runtime'
 import { testClock } from './test-clock'
+import { wait } from './transport'
 import { syntheticAdapter } from './adapter'
 import { initialArea } from '../shared/geography'
 
@@ -546,4 +547,44 @@ test('persists long and final Retry-After cooldowns across sources, jobs and res
       }
     }
   }
+})
+
+test('request cancellation interrupts Retry-After backoff without another transport attempt', async () => {
+  const clock = testClock(0)
+  let waiting = false
+  let attempts = 0
+  const runtime = new ImportRuntime(':memory:', 0, {
+    ...clock,
+    wait: async (milliseconds, signal) => {
+      waiting = true
+      await wait(milliseconds, signal)
+      clock.advance(milliseconds)
+    },
+    transport: async () => {
+      attempts++
+      return { status: 429, headers: { 'retry-after': '5' } }
+    },
+  })
+  runtimes.push(runtime)
+  const request = runtime.createRequest({
+    area: initialArea,
+    intent: 'import',
+    idempotencyKey: 'cancel-backoff',
+  })
+  await expect.poll(() => waiting).toBe(true)
+  expect(
+    await runtime.dispatch('cancelImportRequest', request.id),
+  ).toMatchObject({ state: 'running' })
+  await expect
+    .poll(() => runtime.inspectRequest(request.id).state)
+    .toBe('cancelled')
+  expect(runtime.inspect(request.jobIds[0])).toMatchObject({
+    state: 'cancelled',
+    reasons: ['USER_CANCELLED'],
+    budget: { discoveryUsed: 1, detailUsed: 0 },
+  })
+  expect(attempts).toBe(1)
+  expect(await runtime.dispatch('cancelImportRequest', request.id)).toEqual(
+    runtime.inspectRequest(request.id),
+  )
 })

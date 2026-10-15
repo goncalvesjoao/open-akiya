@@ -10,6 +10,7 @@ const operations: (keyof DesktopAPI)[] = [
   'inspectImportRequest',
   'inspectImport',
   'cancelImport',
+  'cancelImportRequest',
   'listImports',
   'areaResults',
   'searchLocations',
