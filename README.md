@@ -30,7 +30,7 @@ In `.env.local`, set `DATABASE_URL` to the local connection URL with `?sslmode=d
 npm run dev:local
 ```
 
-Startup invokes Supabase CLI directly with the configured `DATABASE_URL`, then starts the frontend, API and independent worker. See [local runtime setup](docs/local-import-runtime.md) for the API journey and existing-database transition.
+The npm scripts load `.env.local`, apply migrations through Supabase CLI with the configured `DATABASE_URL`, then use `concurrently` to start the loopback frontend, API and independent worker with named output. Ctrl+C or any service exit stops the other services. See [local runtime setup](docs/local-import-runtime.md) for the API journey and existing-database transition.
 
 To apply only migrations to the standard local Supabase stack, run `npm run db:migrate` (`supabase migration up --local`). This command targets that stack and does not read `.env.local`. For an alternate Postgres, export its connection URL in your shell and run the CLI explicitly:
 

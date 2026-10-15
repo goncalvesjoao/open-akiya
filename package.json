@@ -14,9 +14,10 @@
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "preview": "vite preview",
-    "dev:local": "node --env-file=.env.local --import tsx scripts/start.ts",
+    "dev:local": "dotenv -e .env.local -- npm run dev:local:start",
     "db:migrate": "supabase migration up --local",
-    "test:server": "tsx scripts/test-server.ts"
+    "test:server": "tsx scripts/test-server.ts",
+    "dev:local:start": "supabase migration up --db-url \"${DATABASE_URL:?DATABASE_URL must be set in .env.local}\" && concurrently --kill-others --success first --names api,worker,web \"tsx server/main.ts\" \"tsx server/worker-main.ts\" \"vite --host 127.0.0.1 --strictPort\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.0.0",
@@ -36,6 +37,8 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "concurrently": "10.0.6",
+    "dotenv-cli": "11.0.0",
     "eslint": "^9.0.0",
     "eslint-plugin-react-hooks": "^7.0.0",
     "eslint-plugin-react-refresh": "^0.4.0",
