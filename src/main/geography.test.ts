@@ -335,10 +335,10 @@ test('independent saved-area queries preserve check times and never collect or f
       '2026-10-15T00:00:06.000Z',
     ])
     expect(result.coverage).toMatchObject({
-      status: 'unknown',
-      lastSuccessfulCheckAt: null,
-      freshUntil: null,
-      scopeKey: null,
+      status: 'complete',
+      lastSuccessfulCheckAt: '2026-10-15T00:00:08.000Z',
+      freshUntil: '2026-10-16T00:00:02.000Z',
+      scopeKey: local.inspect(request.jobIds[0]).scopeKey,
     })
     expect(result.generatedAt).toBe('2026-10-16T00:00:00.000Z')
     expect(
