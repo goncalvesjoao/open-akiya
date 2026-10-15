@@ -32,7 +32,20 @@ async function completed(runtime: ImportRuntime, id: string) {
 }
 
 test('persists one fixed known-inside offer with truthful stages, counts, and unchanged updates', async () => {
-  const runtime = open('identities.sqlite', 40)
+  const base = syntheticAdapter(0)
+  let releaseDetail!: () => void
+  const detailGate = new Promise<void>((resolve) => {
+    releaseDetail = resolve
+  })
+  const runtime = open('identities.sqlite', 0, [
+    {
+      ...base,
+      async fetchDetail(candidate, context) {
+        await detailGate
+        return base.fetchDetail(candidate, context)
+      },
+    },
+  ])
   const request = runtime.createRequest(input)
   const jobId = request.jobIds[0]
   expect(runtime.inspect(jobId)).toMatchObject({
@@ -40,8 +53,14 @@ test('persists one fixed known-inside offer with truthful stages, counts, and un
     startedAt: null,
     counts: { discovered: 0, checked: 0, added: 0 },
   })
-  await expect.poll(() => runtime.inspect(jobId).stage).toBe('fetching')
-  expect(runtime.inspectRequest(request.id)).toMatchObject({ state: 'running' })
+  try {
+    await expect.poll(() => runtime.inspect(jobId).stage).toBe('fetching')
+    expect(runtime.inspectRequest(request.id)).toMatchObject({
+      state: 'running',
+    })
+  } finally {
+    releaseDetail()
+  }
   const job = await completed(runtime, jobId)
   expect(job).toMatchObject({
     counts: {

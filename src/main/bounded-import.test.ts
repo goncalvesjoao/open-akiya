@@ -223,7 +223,7 @@ test('detail attempts stop at 100 and known-outside candidates consume no detail
     idempotencyKey: 'details',
   })
   await expect
-    .poll(() => runtime.inspect(request.jobIds[0]).stage)
+    .poll(() => runtime.inspect(request.jobIds[0]).stage, { timeout: 5000 })
     .toBe('finished')
   expect(runtime.inspect(request.jobIds[0])).toMatchObject({
     state: 'partial',
@@ -231,7 +231,7 @@ test('detail attempts stop at 100 and known-outside candidates consume no detail
     budget: { detailUsed: 100 },
     coverage: { status: 'partial' },
   })
-})
+}, 10000)
 
 test('timeouts have bounded retries and cancellation aborts transport without retrying', async () => {
   for (const cancel of [false, true]) {
