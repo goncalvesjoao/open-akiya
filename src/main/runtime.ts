@@ -970,6 +970,23 @@ export class ImportRuntime {
         ),
       ]
     }
+    if (progress.oldestDetailCheckAt === undefined) {
+      for (const identity of progress.completed) {
+        if (!identity.startsWith('[')) continue
+        const [sourceId, externalId, transactionType] = JSON.parse(identity)
+        const row = this.db
+          .prepare(
+            'SELECT data FROM offer_observations WHERE source_id=? AND external_id=? AND transaction_type=?',
+          )
+          .get(sourceId, externalId, transactionType)
+        if (!row) continue
+        const observation: SourceObservation = JSON.parse(String(row.data))
+        progress.oldestDetailCheckAt = Math.min(
+          progress.oldestDetailCheckAt ?? Infinity,
+          Date.parse(observation.sourceCheckedAt),
+        )
+      }
+    }
     // Completed also includes rejections. Recover useful work only from this
     // source's retained successful checks during the interrupted execution.
     if (progress.sourceSaved === undefined) {

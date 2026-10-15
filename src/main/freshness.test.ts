@@ -427,3 +427,37 @@ test('source ordering changes retain the same set semantics and correct queued s
     ]),
   )
 })
+
+test('legacy interrupted progress recovers actual completed detail times instead of renewing them on restart', async () => {
+  const { DatabaseSync } = await import('node:sqlite')
+  const path = join(directory, 'legacy-progress.sqlite')
+  const clock = testClock(0)
+  const options = {
+    ...clock,
+    adapters: [syntheticAdapter(50, fixtures.slice(0, 2))],
+  }
+  let runtime = new ImportRuntime(path, 0, options)
+  runtimes.push(runtime)
+  const first = request(runtime)
+  await expect
+    .poll(() => runtime.inspect(first.jobIds[0]).counts.checked, {
+      interval: 10,
+    })
+    .toBe(1)
+  await runtime.close()
+  const database = new DatabaseSync(path)
+  // Simulate the durable progress shape retained by the previous runtime version.
+  database
+    .prepare(
+      "UPDATE import_jobs_v2 SET progress=json_remove(progress,'$.oldestDetailCheckAt') WHERE id=?",
+    )
+    .run(first.jobIds[0])
+  database.close()
+  clock.advance(90000000)
+  runtime = new ImportRuntime(path, 0, options)
+  runtimes.push(runtime)
+  const recovered = await done(runtime, first.jobIds[0])
+  expect(recovered.state).toBe('succeeded')
+  expect(recovered.coverage.freshUntil).toBe('1970-01-02T00:00:02.000Z')
+  expect(request(runtime).disposition).toBe('created')
+})
