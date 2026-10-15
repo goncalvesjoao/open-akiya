@@ -77,6 +77,7 @@ export class ImportRuntime {
       CREATE TABLE IF NOT EXISTS import_requests_v2 (id TEXT PRIMARY KEY, key TEXT UNIQUE NOT NULL, semantic TEXT NOT NULL, job_id TEXT NOT NULL REFERENCES import_jobs_v2(id), data TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS executor_v2 (singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, external_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(source_id,external_id));
+      CREATE TABLE IF NOT EXISTS listing_discovery_areas (listing_id TEXT NOT NULL REFERENCES listings(id), area TEXT NOT NULL, PRIMARY KEY(listing_id,area));
       CREATE TABLE IF NOT EXISTS observations (source_id TEXT NOT NULL, external_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id,external_id));`)
     this.schedule()
   }
@@ -302,9 +303,22 @@ export class ImportRuntime {
         (listing) =>
           (showUnavailable || listing.availability !== 'unavailable') &&
           (listing.location.kind === 'verified' ||
-            listing.location.kind === 'unverified') &&
-          distanceMetres(area.center, listing.location.point) <=
-            area.radiusKm * 1000 + 1e-8,
+          listing.location.kind === 'unverified'
+            ? distanceMetres(area.center, listing.location.point) <=
+              area.radiusKm * 1000 + 1e-8
+            : listing.location.kind === 'unknown' &&
+              this.db
+                .prepare(
+                  'SELECT area FROM listing_discovery_areas WHERE listing_id=?',
+                )
+                .all(listing.id)
+                .some((row) => {
+                  const scope: SelectedArea = JSON.parse(String(row.area))
+                  return (
+                    distanceMetres(area.center, scope.center) <=
+                    (area.radiusKm + scope.radiusKm) * 1000 + 1e-8
+                  )
+                })),
       ),
       municipalityGroups: [],
       coverage: coverage(null),
@@ -523,6 +537,9 @@ export class ImportRuntime {
         source.externalId,
         JSON.stringify(listing),
       )
+    this.db
+      .prepare('INSERT OR IGNORE INTO listing_discovery_areas VALUES (?,?)')
+      .run(listing.id, JSON.stringify(job.area))
     if (!previous) job.counts.added++
     else if (unchanged) job.counts.unchanged++
     else job.counts.updated++
