@@ -12,15 +12,19 @@ function point(value: { latitude: number; longitude: number }) {
     invalid('Invalid source location')
   return { latitude: value.latitude, longitude: value.longitude }
 }
+function hasVerificationEvidence(
+  value: Extract<Location, { kind: 'verified' }>,
+): boolean {
+  return (
+    typeof value.evidence === 'string' &&
+    Boolean(value.evidence.trim()) &&
+    Number.isFinite(Date.parse(value.verifiedAt))
+  )
+}
 function location(value: Location): Location {
   switch (value?.kind) {
     case 'verified':
-      if (
-        typeof value.evidence !== 'string' ||
-        !value.evidence.trim() ||
-        !Number.isFinite(Date.parse(value.verifiedAt))
-      )
-        invalid('Invalid source location')
+      if (!hasVerificationEvidence(value)) invalid('Invalid source location')
       return {
         kind: 'verified',
         point: point(value.point),
@@ -103,12 +107,7 @@ export function savedListingProjection(
   value: ListingProjection,
 ): ListingProjection {
   const location = value.location
-  if (
-    location?.kind === 'verified' &&
-    (typeof location.evidence !== 'string' ||
-      !location.evidence.trim() ||
-      !Number.isFinite(Date.parse(location.verifiedAt)))
-  ) {
+  if (location?.kind === 'verified' && !hasVerificationEvidence(location)) {
     return listingProjection({
       ...value,
       location: {
