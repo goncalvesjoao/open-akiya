@@ -109,7 +109,8 @@ export function syntheticAdapter(
       await context.request('discovery', 'https://example.invalid/discovery')
       const inside = offers.filter(
         (offer) =>
-          offer.location.kind === 'verified' &&
+          (offer.location.kind === 'verified' ||
+            offer.location.kind === 'unverified') &&
           distanceMetres(area.center, offer.location.point) <=
             area.radiusKm * 1000 + 1e-8,
       )
@@ -122,7 +123,8 @@ export function syntheticAdapter(
           municipalityId: null,
           publishedAt: null,
           modifiedAt: null,
-          relevance: 'known_inside',
+          relevance:
+            offer.location.kind === 'verified' ? 'known_inside' : 'plausible',
         })),
         nextCursor: null,
         exhausted: true,

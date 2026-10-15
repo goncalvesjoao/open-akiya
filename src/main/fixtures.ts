@@ -75,3 +75,47 @@ export const fixtures = [
   }),
   fixture('sample-boundary-1', '境界サンプル', { latitude: 0, longitude: 0 }),
 ]
+
+// Published source points are candidate coordinates, never verified locations.
+export const uncertainFixtures: ListingProjection[] = [
+  fixture(
+    'sample-unverified-1',
+    '位置未確認サンプル',
+    { latitude: 35.005, longitude: 135 },
+    {
+      location: {
+        kind: 'unverified',
+        point: { latitude: 35.005, longitude: 135 },
+        precision: 'unknown',
+        sourceId: 'fixture',
+      },
+    },
+  ),
+  fixture(
+    'sample-approximate-1',
+    '概略位置サンプル',
+    { latitude: 35.005, longitude: 135 },
+    {
+      location: {
+        kind: 'unverified',
+        point: { latitude: 35.005, longitude: 135 },
+        precision: 'approximate',
+        sourceId: 'fixture',
+      },
+    },
+  ),
+  fixture(
+    'sample-unverified-unavailable-1',
+    '募集終了の位置未確認サンプル',
+    { latitude: 35.006, longitude: 135 },
+    {
+      availability: 'unavailable',
+      location: {
+        kind: 'unverified',
+        point: { latitude: 35.006, longitude: 135 },
+        precision: 'unknown',
+        sourceId: 'fixture',
+      },
+    },
+  ),
+]
