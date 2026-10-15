@@ -12,7 +12,12 @@ import type {
   ListingProjection,
   SelectedArea,
 } from '../shared/listings'
-import type { ImportJob, ImportRequest, Operation } from '../shared/desktop'
+import type {
+  ApiError,
+  ImportJob,
+  ImportRequest,
+  Operation,
+} from '../shared/desktop'
 import {
   syntheticAdapter,
   type SourceAdapter,
@@ -69,6 +74,7 @@ type Progress = {
   nextDetailClass?: 'new' | 'refresh'
   refreshReservation?: number
   refreshAttemptLimit?: number
+  rejectionError?: ApiError
   visitedCursors?: string[]
   oldestDetailCheckAt?: number
 }
@@ -609,6 +615,7 @@ export class ImportRuntime {
                 limitation: null,
                 discovered: saved?.discovered ?? [],
                 completed: saved?.completed ?? [],
+                rejectionError: saved?.rejectionError,
               }
             }
             return capabilities
@@ -1735,6 +1742,7 @@ export class ImportRuntime {
         }
         progress.sourceSaved = Math.max(progress.sourceSaved ?? 0, progress.savedBySource?.[progress.sourceIndex] ?? 0)
         source.state = 'running'
+        source.error = progress.rejectionError ?? source.error
         const context = this.context(job, adapter, progress)
         try {
           if (adapter.capabilities.geography === 'unsupported')
@@ -1967,6 +1975,7 @@ export class ImportRuntime {
             }),
           )
         progress.sourceSaved = 0
+        progress.rejectionError = undefined
         progress.sourceIndex++
         progress.candidates = []
         progress.candidateIndex = 0

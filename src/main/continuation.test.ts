@@ -598,3 +598,87 @@ test('failed discovery advertises restartable work without automatically creatin
     .toBe('succeeded')
   expect(runtime.inspect(failed.id)).toEqual(failed)
 })
+
+test.each(['normalization', 'validation'] as const)(
+  'a continuation cannot erase an earlier %s rejection when later details succeed',
+  async (failure) => {
+    const base = syntheticAdapter(0)
+    let checks = 0
+    const runtime = new ImportRuntime(':memory:', 0, {
+      ...testClock(0),
+      detailLimit: 1,
+      adapters: [
+        {
+          ...base,
+          async discover(input, context) {
+            const page = await base.discover(input, context)
+            return {
+              ...page,
+              candidates: [
+                page.candidates[0],
+                { ...page.candidates[0], externalId: 'later' },
+              ],
+            }
+          },
+          normalize(evidence) {
+            checks++
+            if (checks === 1 && failure === 'normalization')
+              return {
+                kind: 'rejected',
+                error: {
+                  code: 'PARSE_ERROR',
+                  message: 'Synthetic rejection',
+                  retryable: false,
+                },
+              }
+            const normalized = base.normalize(evidence)
+            if (checks === 1 && normalized.kind === 'accepted')
+              normalized.observation.fields.salePriceJpy = -1
+            return normalized
+          },
+        },
+      ],
+    })
+    runtimes.push(runtime)
+    const first = runtime.createRequest({
+      area: initialArea,
+      intent: 'import',
+      idempotencyKey: 'rejected-first',
+    })
+    await expect
+      .poll(() => runtime.inspect(first.jobIds[0]).stage)
+      .toBe('finished')
+    const original = runtime.inspect(first.jobIds[0])
+    expect(original).toMatchObject({
+      counts: { rejected: 1, added: 0 },
+      continuation: { available: true },
+    })
+    const next = runtime.createRequest({
+      intent: 'continue',
+      fromJobId: original.id,
+      idempotencyKey: 'after-rejection',
+    })
+    await expect
+      .poll(() => runtime.inspect(next.jobIds[0]).stage)
+      .toBe('finished')
+    expect(runtime.inspect(next.jobIds[0])).toMatchObject({
+      state: 'partial',
+      counts: { checked: 1, added: 1, rejected: 0 },
+      coverage: { status: 'partial', lastSuccessfulCheckAt: null },
+      sources: [
+        {
+          coverage: 'partial',
+          error: {
+            code:
+              failure === 'normalization' ? 'PARSE_ERROR' : 'INVALID_REQUEST',
+          },
+        },
+      ],
+      continuation: { available: false },
+    })
+    expect(runtime.inspect(original.id)).toEqual(original)
+    expect(
+      runtime.results({ area: initialArea, showUnavailable: true }).listings,
+    ).toHaveLength(1)
+  },
+)
