@@ -1,7 +1,11 @@
 import { workerRequest, type TransportOptions } from './transport'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
-import { areasIntersect, isSelectedArea } from '../shared/geography'
+import {
+  areasIntersect,
+  distanceMetres,
+  isSelectedArea,
+} from '../shared/geography'
 import type {
   AreaResults,
   Coverage,
@@ -31,7 +35,7 @@ function identifier(value: unknown): string {
     invalid('Invalid identifier')
   return value
 }
-const active = (job: ImportJob) =>
+const active = (job: Pick<ImportJob, 'state'>) =>
   job.state === 'queued' || job.state === 'running'
 const coverage = (scopeKey: string | null): Coverage => ({
   status: 'unknown',
@@ -41,6 +45,8 @@ const coverage = (scopeKey: string | null): Coverage => ({
   caveats: ['Synthetic fixtures only; no real inventory or source coverage.'],
 })
 type Progress = {
+  reuseAfter?: string
+  oldestDetailCheck?: number
   sourceIndex: number
   cursor: string | null
   candidates: Candidate[]
@@ -82,6 +88,7 @@ export class ImportRuntime {
   private readonly transportQueue = { tail: Promise.resolve() }
   private stopping = false
   private executing = false
+  private executingJobId: string | undefined
   private closed = false
   private timer: ReturnType<typeof setTimeout> | undefined
   private heartbeat: ReturnType<typeof setInterval> | undefined
@@ -118,6 +125,7 @@ export class ImportRuntime {
       CREATE TABLE IF NOT EXISTS offer_observations (source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id,external_id,transaction_type));
       CREATE TABLE IF NOT EXISTS offer_observation_history (id INTEGER PRIMARY KEY, source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, data TEXT NOT NULL);
       INSERT INTO offer_observation_history(source_id,external_id,transaction_type,data) SELECT o.source_id,o.external_id,o.transaction_type,o.data FROM offer_observations o WHERE NOT EXISTS (SELECT 1 FROM offer_observation_history h WHERE h.source_id=o.source_id AND h.external_id=o.external_id AND h.transaction_type=o.transaction_type);
+      CREATE TABLE IF NOT EXISTS reusable_details (source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, semantics TEXT NOT NULL, checked_at TEXT NOT NULL, PRIMARY KEY(source_id,external_id,transaction_type));
       CREATE TABLE IF NOT EXISTS observations (source_id TEXT NOT NULL, external_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id,external_id));`)
     this.schedule()
   }
@@ -178,19 +186,65 @@ export class ImportRuntime {
         ELSE ? END WHERE id=?`,
       )
       .run(job.state, JSON.stringify(job), JSON.stringify(job), job.id)
-    const row = this.db
-      .prepare('SELECT data FROM import_requests_v2 WHERE job_id=?')
-      .get(job.id)
-    if (row) {
+    const rows = this.db
+      .prepare('SELECT id,data FROM import_requests_v2 WHERE job_id=?')
+      .all(job.id)
+    for (const row of rows) {
       const request: ImportRequest = JSON.parse(String(row.data))
+      if (!active(request)) continue
       request.state = job.state
       request.finishedAt = job.finishedAt
       request.error = job.error
       this.db
-        .prepare('UPDATE import_requests_v2 SET data=? WHERE job_id=?')
-        .run(JSON.stringify(request), job.id)
+        .prepare(
+          "UPDATE import_requests_v2 SET data=? WHERE id=? AND json_extract(data,'$.state') IN ('queued','running')",
+        )
+        .run(JSON.stringify(request), row.id)
     }
   }
+  private coveringJob(
+    scope: string,
+    completedAfter?: string,
+  ): ImportJob | undefined {
+    const requested = JSON.parse(scope)
+    const candidates: ImportJob[] = completedAfter
+      ? this.db
+          .prepare(
+            "SELECT data FROM import_jobs_v2 WHERE state='succeeded' ORDER BY rowid DESC",
+          )
+          .all()
+          .map((row) => JSON.parse(String(row.data)))
+      : this.activeJobs()
+    for (const job of candidates) {
+      if (
+        completedAfter &&
+        (!job.finishedAt ||
+          Date.parse(job.finishedAt) < Date.parse(completedAfter) ||
+          job.coverage.status !== 'complete' ||
+          !job.coverage.freshUntil ||
+          Date.parse(job.coverage.freshUntil) <= this.now())
+      )
+        continue
+      if (job.cancelRequestedAt) continue
+      const saved = JSON.parse(
+        String(
+          this.db
+            .prepare('SELECT scope FROM import_jobs_v2 WHERE id=?')
+            .get(job.id)!.scope,
+        ),
+      )
+      const { area: coveringArea, ...semantics } = saved
+      const { area: requestedArea, ...requestedSemantics } = requested
+      if (
+        JSON.stringify(semantics) === JSON.stringify(requestedSemantics) &&
+        distanceMetres(coveringArea.center, requestedArea.center) +
+          requestedArea.radiusKm * 1000 <=
+          coveringArea.radiusKm * 1000
+      )
+        return job
+    }
+  }
+
   createRequest(input: unknown): ImportRequest {
     if (
       !record(input) ||
@@ -232,7 +286,8 @@ export class ImportRuntime {
         referenceVersion: 'synthetic-v1',
       })
       const scopeKey = createHash('sha256').update(scope).digest('hex')
-      const job: ImportJob = {
+      const covering = this.coveringJob(scope)
+      const job: ImportJob = covering ?? {
         id: randomUUID(),
         area,
         scopeKey,
@@ -273,6 +328,7 @@ export class ImportRuntime {
         },
       }
       const progress: Progress = {
+        ...(this.activeJobs().length ? { reuseAfter: this.time() } : {}),
         sourceIndex: 0,
         cursor: null,
         candidates: [],
@@ -286,23 +342,24 @@ export class ImportRuntime {
         id: randomUUID(),
         area,
         intent: 'import',
-        state: 'queued',
-        disposition: 'created',
+        state: job.state,
+        disposition: covering ? 'attached' : 'created',
         jobIds: [job.id],
         pendingFollowUp: false,
-        createdAt: job.createdAt,
+        createdAt: this.time(),
         finishedAt: null,
         error: null,
       }
-      this.db
-        .prepare('INSERT INTO import_jobs_v2 VALUES (?,?,?,?,?)')
-        .run(
-          job.id,
-          job.state,
-          JSON.stringify(job),
-          scope,
-          JSON.stringify(progress),
-        )
+      if (!covering)
+        this.db
+          .prepare('INSERT INTO import_jobs_v2 VALUES (?,?,?,?,?)')
+          .run(
+            job.id,
+            job.state,
+            JSON.stringify(job),
+            scope,
+            JSON.stringify(progress),
+          )
       this.db
         .prepare('INSERT INTO import_requests_v2 VALUES (?,?,?,?,?)')
         .run(request.id, key, semantic, job.id, JSON.stringify(request))
@@ -311,26 +368,53 @@ export class ImportRuntime {
     this.schedule()
     return result
   }
-  cancel(input: unknown): ImportJob {
-    const job = this.transaction(() => {
-      const job = this.inspect(input)
-      if (!active(job)) return job
-      job.cancelRequestedAt ??= this.time()
-      if (!job.reasons.includes('USER_CANCELLED'))
-        job.reasons.push('USER_CANCELLED')
-      if (job.state === 'queued') {
-        job.state = 'cancelled'
-        job.stage = 'finished'
-        job.finishedAt = this.time()
-        job.sources.forEach((source) => {
-          source.state = 'cancelled'
-        })
-      }
-      this.save(job)
-      return job
-    })
-    if (job.state === 'running') this.controller?.abort()
+  private requestJobCancellation(job: ImportJob): ImportJob {
+    if (!active(job)) return job
+    job.cancelRequestedAt ??= this.time()
+    if (!job.reasons.includes('USER_CANCELLED'))
+      job.reasons.push('USER_CANCELLED')
+    if (job.state === 'queued') {
+      job.state = 'cancelled'
+      job.stage = 'finished'
+      job.finishedAt = this.time()
+      job.sources.forEach((source) => {
+        source.state = 'cancelled'
+      })
+    }
+    this.save(job)
     return job
+  }
+  cancel(input: unknown): ImportJob {
+    const job = this.transaction(() =>
+      this.requestJobCancellation(this.inspect(input)),
+    )
+    if (job.state === 'running' && this.executingJobId === job.id)
+      this.controller?.abort()
+    return job
+  }
+  private cancelRequest(input: unknown): ImportRequest {
+    const request = this.transaction(() => {
+      const request = this.inspectRequest(input)
+      if (!active(request)) return request
+      request.state = 'cancelled'
+      request.pendingFollowUp = false
+      request.finishedAt = this.time()
+      request.error = null
+      this.db
+        .prepare('UPDATE import_requests_v2 SET data=? WHERE id=?')
+        .run(JSON.stringify(request), request.id)
+      const jobId = request.jobIds[request.jobIds.length - 1]
+      const owners = this.db
+        .prepare('SELECT data FROM import_requests_v2 WHERE job_id=?')
+        .all(jobId)
+        .some((row) => active(JSON.parse(String(row.data))))
+      if (!owners) this.requestJobCancellation(this.inspect(jobId))
+      return request
+    })
+    const jobId = request.jobIds[request.jobIds.length - 1]
+    if (this.executingJobId === jobId && this.inspect(jobId).cancelRequestedAt)
+      this.controller?.abort()
+    return request
   }
   results(input: unknown): AreaResults {
     if (
@@ -902,6 +986,7 @@ export class ImportRuntime {
       return
     }
     this.executing = true
+    this.executingJobId = job.id
     this.controller = new AbortController()
     this.heartbeat = setInterval(
       () => {
@@ -928,6 +1013,47 @@ export class ImportRuntime {
           'Saved source configuration is unavailable',
         )
       const progress: Progress = JSON.parse(String(row.progress))
+      const cached =
+        progress.reuseAfter && !job.cancelRequestedAt
+          ? this.coveringJob(String(row.scope), progress.reuseAfter)
+          : undefined
+      if (
+        cached &&
+        !progress.discovered.length &&
+        progress.sourceIndex === 0 &&
+        !progress.cursor
+      ) {
+        job.state = 'succeeded'
+        job.stage = 'finished'
+        job.finishedAt = this.time()
+        job.coverage = { ...cached.coverage, scopeKey: job.scopeKey }
+        job.sources = cached.sources
+        job.reasons.push('CACHE_REUSED')
+        this.transaction(() => {
+          this.ensure(job)
+          const requests = this.db
+            .prepare('SELECT id,data FROM import_requests_v2 WHERE job_id=?')
+            .all(job.id)
+          for (const row of requests) {
+            const request: ImportRequest = JSON.parse(String(row.data))
+            if (!active(request)) continue
+            Object.assign(request, {
+              state: 'succeeded',
+              disposition: 'cached',
+              jobIds: [cached.id],
+              finishedAt: this.time(),
+              error: null,
+            })
+            this.db
+              .prepare(
+                'UPDATE import_requests_v2 SET job_id=?,data=? WHERE id=?',
+              )
+              .run(cached.id, JSON.stringify(request), row.id)
+          }
+          this.save(job)
+        })
+        return
+      }
       this.upgradeProgress(job, progress)
       job.counts.discovered = progress.discovered.length
       // Retain the upgrade before outbound work: a later failed transaction
@@ -1032,6 +1158,47 @@ export class ImportRuntime {
                 this.saveProgress(job, progress)
                 continue
               }
+              const reusable = this.db
+                .prepare(
+                  'SELECT semantics,checked_at FROM reusable_details WHERE source_id=? AND external_id=? AND transaction_type=?',
+                )
+                .get(
+                  adapter.capabilities.sourceId,
+                  candidate.externalId,
+                  candidate.transactionType,
+                )
+              if (
+                progress.reuseAfter &&
+                reusable &&
+                reusable.semantics === JSON.stringify(adapter.capabilities) &&
+                Date.parse(String(reusable.checked_at)) >=
+                  Date.parse(progress.reuseAfter) &&
+                Date.parse(String(reusable.checked_at)) <= this.now() &&
+                Date.parse(String(reusable.checked_at)) + 86400000 > this.now()
+              ) {
+                this.transaction(() => {
+                  this.ensure(job)
+                  this.db
+                    .prepare(
+                      'INSERT OR IGNORE INTO listing_discovery_areas SELECT listing_id,? FROM offer_keys WHERE source_id=? AND external_id=? AND transaction_type=?',
+                    )
+                    .run(
+                      JSON.stringify(job.area),
+                      adapter.capabilities.sourceId,
+                      candidate.externalId,
+                      candidate.transactionType,
+                    )
+                  progress.oldestDetailCheck = Math.min(
+                    progress.oldestDetailCheck ?? Infinity,
+                    Date.parse(String(reusable.checked_at)),
+                  )
+                  progress.completed.push(identity)
+                  progress.sourceSaved!++
+                  progress.candidateIndex++
+                  this.saveProgress(job, progress)
+                })
+                continue
+              }
               job.stage = 'fetching'
               this.save(job)
               const evidence = await this.parse(() =>
@@ -1050,6 +1217,21 @@ export class ImportRuntime {
                 if (normalized.kind === 'accepted') {
                   try {
                     this.commit(job, normalized.observation, adapter, candidate)
+                    this.db
+                      .prepare(
+                        'INSERT OR REPLACE INTO reusable_details VALUES (?,?,?,?,?)',
+                      )
+                      .run(
+                        adapter.capabilities.sourceId,
+                        candidate.externalId,
+                        candidate.transactionType,
+                        JSON.stringify(adapter.capabilities),
+                        normalized.observation.sourceCheckedAt,
+                      )
+                    progress.oldestDetailCheck = Math.min(
+                      progress.oldestDetailCheck ?? Infinity,
+                      Date.parse(normalized.observation.sourceCheckedAt),
+                    )
                     progress.sourceSaved!++
                   } catch (error) {
                     if (
@@ -1156,8 +1338,13 @@ export class ImportRuntime {
       )
         ? 'complete'
         : 'partial'
-      if (job.state === 'succeeded')
+      if (job.state === 'succeeded') {
         job.coverage.lastSuccessfulCheckAt = this.time()
+        job.coverage.freshUntil = new Date(
+          Math.min(this.now(), progress.oldestDetailCheck ?? Infinity) +
+            86400000,
+        ).toISOString()
+      }
       job.stage = 'finished'
       job.finishedAt = this.time()
       this.transaction(() => {
@@ -1198,6 +1385,7 @@ export class ImportRuntime {
       clearInterval(this.heartbeat)
       this.db.prepare('DELETE FROM executor_v2 WHERE owner=?').run(this.owner)
       this.executing = false
+      this.executingJobId = undefined
       if (this.stopping) this.finishClose()
       else this.schedule()
     }
@@ -1227,11 +1415,8 @@ export class ImportRuntime {
         return this.inspect(input)
       case 'cancelImport':
         return this.cancel(input)
-      case 'cancelImportRequest': {
-        const request = this.inspectRequest(input)
-        this.cancel(request.jobIds[0])
-        return this.inspectRequest(request.id)
-      }
+      case 'cancelImportRequest':
+        return this.cancelRequest(input)
       case 'listImports':
         return this.list(input)
       case 'areaResults':
