@@ -6,6 +6,12 @@ Open Akiya is a local desktop application built with Electron, React and TypeScr
 
 The current app imports **fictional sample listings only**. Select an area, choose **Import sample listings**, inspect progress, and explore saved results on the map. Real sources, address lookup, freshness policies, manual refresh and continuation remain planned; see the [implementation plan](docs/implementation-plan.md).
 
+## Installing and launching
+
+Release installers have not yet been published. A maintainer can build an installer with `npm run dist` (Linux AppImage by default; `.dmg` on macOS and the Windows installer on Windows). On Linux, mark the produced AppImage executable and launch it from the file manager or terminal; on macOS, open the disk image and copy Open Akiya to Applications; on Windows, run the installer and launch Open Akiya from Start. Installed users need no separate Node.js, Docker, Supabase or database credentials. Signing and platform validation remain release work.
+
+The default synthetic offer is fixed at 35° N, 135° E; the initial selected area includes it. Importing another area does not fabricate an offer at that center.
+
 ## Development
 
 Requires Node.js 24+ and npm. Electron includes its own runtime for installed users.
@@ -19,7 +25,7 @@ npm run dev
 
 ```sh
 npm test              # SQLite worker/domain tests and React UI tests
-npm run test:e2e      # Real Electron import, reload and relaunch journey
+npm run test:e2e      # Reserved integrated journey command (no e2e cases yet)
 npm run lint
 npm run format:check
 npm run build         # Type checks and renderer/main/preload/worker bundles
@@ -28,7 +34,7 @@ npm run package       # Build an unpacked application in release/
 npm run dist          # Build the platform installer (Linux AppImage by default)
 ```
 
-Electron tests require a graphical session, or a suitable virtual display in CI. They isolate application data in temporary directories and block external network requests. They do not scrape live sources. Installer production/signing and Windows/macOS validation remain release work.
+The integrated Electron journey remains assigned to #7; the current checkout has no `e2e/` cases, so `test:e2e` reports no tests. Worker tests isolate data in temporary SQLite databases and use deterministic synthetic adapters without live source requests. Installer production/signing and Windows/macOS validation remain release work.
 
 ## Local data and background imports
 
@@ -45,7 +51,7 @@ Saved listing queries make no collection requests. Map tiles use the OpenStreetM
 - `src/renderer/` — React interface, HTML, styles and UI tests.
 - `src/shared/` — process-neutral contracts and geographic validation.
 - `out/` — generated main, preload and renderer bundles.
-- `e2e/` — integrated Electron journey.
+- `playwright.config.ts` — reserved integrated Electron journey configuration.
 - `docs/` — active specifications, decisions, research and implementation plan.
 
 See the [desktop runtime](docs/desktop-runtime.md) for the current architecture and remaining requirements.

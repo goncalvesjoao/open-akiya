@@ -8,7 +8,7 @@ import {
 import { afterEach, expect, test, vi } from 'vitest'
 import ImportControls from './ImportControls'
 import { initialArea } from './listings/query'
-import type { DesktopAPI, Job } from '../../shared/desktop'
+import type { DesktopAPI, Job, ImportRequest } from '../../shared/desktop'
 
 const job: Job = {
   id: 'fixture-job',
@@ -18,20 +18,62 @@ const job: Job = {
   createdAt: '2026-10-15T00:00:00Z',
   startedAt: '2026-10-15T00:00:01Z',
   finishedAt: null,
-  processed: 0,
-  added: 0,
-  updated: 0,
+  scopeKey: 'fixture-scope',
+  cancelRequestedAt: null,
+  counts: {
+    discovered: 0,
+    checked: 0,
+    added: 0,
+    updated: 0,
+    unchanged: 0,
+    rejected: 0,
+  },
+  budget: {
+    discoveryUsed: 0,
+    discoveryLimit: 10,
+    detailUsed: 0,
+    detailLimit: 100,
+  },
+  sources: [
+    { sourceId: 'fixture', state: 'running', coverage: 'unknown', error: null },
+  ],
+  coverage: {
+    status: 'unknown',
+    lastSuccessfulCheckAt: null,
+    freshUntil: null,
+    scopeKey: 'fixture-scope',
+    caveats: [],
+  },
+  reasons: [],
+  continuation: {
+    available: false,
+    fromJobId: null,
+    restarted: false,
+    restartReason: null,
+  },
   error: null,
 }
 function setup(overrides: Partial<DesktopAPI> = {}) {
   const api: DesktopAPI = {
-    createImport: vi.fn(async () => job),
+    createImportRequest: vi.fn(async (): Promise<ImportRequest> => ({
+      id: 'request',
+      area: initialArea,
+      intent: 'import',
+      disposition: 'created',
+      state: 'queued',
+      jobIds: [job.id],
+      pendingFollowUp: false,
+      createdAt: job.createdAt,
+      finishedAt: null,
+      error: null,
+    })),
+    inspectImportRequest: vi.fn(),
     inspectImport: vi.fn(async () => job),
     cancelImport: vi.fn(async (): Promise<Job> => ({
       ...job,
       state: 'cancelled',
     })),
-    listImports: vi.fn(async () => []),
+    listImports: vi.fn(async () => ({ jobs: [] })),
     areaResults: vi.fn(),
     ...overrides,
   }
@@ -49,14 +91,15 @@ test('starts only on explicit action and retains immutable job area when selecti
     <ImportControls area={initialArea} onSettled={() => {}} />,
   )
   await waitFor(() => expect(api.listImports).toHaveBeenCalled())
-  expect(api.createImport).not.toHaveBeenCalled()
-  api.listImports = vi.fn(async () => [job])
+  expect(api.createImportRequest).not.toHaveBeenCalled()
+  api.listImports = vi.fn(async () => ({ jobs: [job] }))
   fireEvent.click(
     screen.getByRole('button', { name: 'Import sample listings' }),
   )
   await waitFor(() =>
-    expect(api.createImport).toHaveBeenCalledWith({
+    expect(api.createImportRequest).toHaveBeenCalledWith({
       area: initialArea,
+      intent: 'import',
       idempotencyKey: expect.any(String),
     }),
   )
@@ -70,11 +113,11 @@ test('starts only on explicit action and retains immutable job area when selecti
   expect(screen.getByRole('list', { name: 'Import queue' })).toHaveTextContent(
     '5 km',
   )
-  expect(api.createImport).toHaveBeenCalledTimes(1)
+  expect(api.createImportRequest).toHaveBeenCalledTimes(1)
 })
 
 test('cancels visible work and refreshes saved results without deleting data', async () => {
-  const api = setup({ listImports: vi.fn(async () => [job]) })
+  const api = setup({ listImports: vi.fn(async () => ({ jobs: [job] })) })
   const settled = vi.fn()
   render(<ImportControls area={initialArea} onSettled={settled} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Cancel import' }))
