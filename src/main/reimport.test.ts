@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ImportRuntime } from './runtime'
+import { testClock } from './test-clock'
 import { syntheticAdapter, type SourceAdapter } from './adapter'
 import { fixtures } from './fixtures'
 import { initialArea } from '../shared/geography'
@@ -29,7 +30,10 @@ async function imported(runtime: ImportRuntime) {
   return runtime.inspect(request.jobIds[0])
 }
 function open(name: string, adapters: SourceAdapter[]) {
-  const runtime = new ImportRuntime(join(directory, name), 1, { adapters })
+  const runtime = new ImportRuntime(join(directory, name), 1, {
+    ...testClock(),
+    adapters,
+  })
   runtimes.push(runtime)
   return runtime
 }
@@ -265,7 +269,7 @@ test.each([-1, 1.25, Number.MAX_SAFE_INTEGER + 1, Infinity, '500'])(
     const before = runtime.results(query).listings[0]
     invalid = true
     expect(await imported(runtime)).toMatchObject({
-      state: 'partial',
+      state: 'failed',
       counts: { checked: 1, rejected: 1, updated: 0 },
     })
     expect(runtime.results(query).listings[0]).toEqual(before)
@@ -361,7 +365,7 @@ test.each([
     for (const blank of ['', ' \t\n　']) {
       patch = blank
       expect(await imported(runtime)).toMatchObject({
-        state: 'partial',
+        state: 'failed',
         counts: { checked: 1, rejected: 1, updated: 0 },
       })
       expect(runtime.results(query).listings[0]).toEqual(saved)

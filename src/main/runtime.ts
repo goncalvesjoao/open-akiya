@@ -1,3 +1,4 @@
+import { workerRequest, type TransportOptions } from './transport'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
 import { areasIntersect, isSelectedArea } from '../shared/geography'
@@ -48,11 +49,25 @@ type Progress = {
   limitation: string | null
   discovered: string[]
   completed: string[]
+  sourceSaved?: number
+  visitedCursors?: string[]
 }
-type RuntimeOptions = {
+function usefulProgress(progress: Progress, errorCode?: string): boolean {
+  return (
+    (progress.sourceSaved ?? 0) > 0 ||
+    (!['INVALID_REQUEST', 'PARSE_ERROR', 'INTERNAL_ERROR'].includes(
+      errorCode ?? '',
+    ) &&
+      (progress.candidateIndex < progress.candidates.length ||
+        (!progress.exhausted && progress.cursor !== null)))
+  )
+}
+type RuntimeOptions = TransportOptions & {
   adapters?: SourceAdapter[]
   now?: () => number
   leaseMs?: number
+  discoveryLimit?: number
+  detailLimit?: number
 }
 
 // Worker API seam: all SQLite access and execution ownership remain outside renderer.
@@ -62,6 +77,9 @@ export class ImportRuntime {
   private readonly adapters: SourceAdapter[]
   private readonly now: () => number
   private readonly leaseMs: number
+  private readonly limits: { discoveryLimit: number; detailLimit: number }
+  private readonly transportOptions: TransportOptions
+  private readonly transportQueue = { tail: Promise.resolve() }
   private stopping = false
   private executing = false
   private closed = false
@@ -69,6 +87,17 @@ export class ImportRuntime {
   private heartbeat: ReturnType<typeof setInterval> | undefined
   private controller: AbortController | undefined
   constructor(path: string, delayMs = 300, options: RuntimeOptions = {}) {
+    this.limits = {
+      discoveryLimit: options.discoveryLimit ?? 10,
+      detailLimit: options.detailLimit ?? 100,
+    }
+    if (
+      Object.values(this.limits).some(
+        (limit) => !Number.isSafeInteger(limit) || limit < 1,
+      )
+    )
+      invalid('Invalid import budget configuration')
+    this.transportOptions = options
     this.adapters = options.adapters ?? [syntheticAdapter(delayMs)]
     this.now = options.now ?? Date.now
     this.leaseMs = options.leaseMs ?? 30000
@@ -81,6 +110,9 @@ export class ImportRuntime {
       CREATE TABLE IF NOT EXISTS executor_v2 (singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, external_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(source_id,external_id));
       CREATE TABLE IF NOT EXISTS listing_discovery_areas (listing_id TEXT NOT NULL REFERENCES listings(id), area TEXT NOT NULL, PRIMARY KEY(listing_id,area));
+      CREATE TABLE IF NOT EXISTS source_host_limits (host TEXT PRIMARY KEY, next_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS source_traversals (job_id TEXT NOT NULL, source_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(job_id,source_id));
+      CREATE TABLE IF NOT EXISTS source_task_state (job_id TEXT NOT NULL, source_id TEXT NOT NULL, retry_at INTEGER, PRIMARY KEY(job_id,source_id));
       CREATE TABLE IF NOT EXISTS offer_keys (source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, listing_id TEXT NOT NULL REFERENCES listings(id), PRIMARY KEY(source_id,external_id,transaction_type));
       INSERT OR IGNORE INTO offer_keys SELECT source_id, coalesce(json_extract(data,'$.sourceRefs[0].externalId'),external_id), json_extract(data,'$.transactionType'),id FROM listings;
       CREATE TABLE IF NOT EXISTS offer_observations (source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id,external_id,transaction_type));
@@ -218,9 +250,9 @@ export class ImportRuntime {
         },
         budget: {
           discoveryUsed: 0,
-          discoveryLimit: 10,
+          discoveryLimit: this.limits.discoveryLimit,
           detailUsed: 0,
-          detailLimit: 100,
+          detailLimit: this.limits.detailLimit,
         },
         sources: this.adapters.map((adapter) => ({
           sourceId: adapter.capabilities.sourceId,
@@ -407,6 +439,8 @@ export class ImportRuntime {
     if (
       this.stopping ||
       !this.owned() ||
+      this.controller?.signal.aborted ||
+      this.inspect(job.id).state !== 'running' ||
       this.inspect(job.id).cancelRequestedAt
     )
       throw new Error('Execution interrupted')
@@ -421,33 +455,55 @@ export class ImportRuntime {
     return {
       signal: this.controller!.signal,
       now: () => this.time(),
-      request: async (kind, value) => {
-        this.ensure(job)
-        const url = new URL(value)
-        if (
-          !['https:', 'http:'].includes(url.protocol) ||
-          url.username ||
-          url.password ||
-          !adapter.capabilities.allowedHosts.includes(url.hostname)
-        )
-          throw new LocalApiError(
-            400,
-            'INVALID_SOURCE_URL',
-            'Source URL rejected',
-          )
-        const used = kind === 'discovery' ? 'discoveryUsed' : 'detailUsed'
-        const limit = kind === 'discovery' ? 'discoveryLimit' : 'detailLimit'
-        if (job.budget[used] >= job.budget[limit])
-          throw new LocalApiError(
-            409,
-            'BUDGET_EXHAUSTED',
-            'Import request budget exhausted',
-          )
-        job.budget[used]++
-        this.save(job)
-        // The synthetic transport performs no network requests. Live transport is out of scope.
-        return null
-      },
+      request: workerRequest({
+        hosts: adapter.capabilities.allowedHosts,
+        signal: this.controller!.signal,
+        now: this.now,
+        ensure: () => this.ensure(job),
+        options: this.transportOptions,
+        queue: this.transportQueue,
+        next: (host) =>
+          Math.max(
+            Number(
+              this.db
+                .prepare('SELECT next_at FROM source_host_limits WHERE host=?')
+                .get(host)?.next_at ?? 0,
+            ),
+            Number(
+              this.db
+                .prepare(
+                  'SELECT retry_at FROM source_task_state WHERE job_id=? AND source_id=?',
+                )
+                .get(job.id, adapter.capabilities.sourceId)?.retry_at ?? 0,
+            ),
+          ),
+        saveNext: (host, time) => {
+          this.db
+            .prepare(
+              'INSERT INTO source_host_limits VALUES (?,?) ON CONFLICT(host) DO UPDATE SET next_at=excluded.next_at',
+            )
+            .run(host, time)
+        },
+        retry: (time) => {
+          this.db
+            .prepare(
+              'INSERT INTO source_task_state VALUES (?,?,?) ON CONFLICT(job_id,source_id) DO UPDATE SET retry_at=excluded.retry_at',
+            )
+            .run(job.id, adapter.capabilities.sourceId, time)
+        },
+        account: (kind) => {
+          const used = kind === 'discovery' ? 'discoveryUsed' : 'detailUsed'
+          const limit = kind === 'discovery' ? 'discoveryLimit' : 'detailLimit'
+          if (job.budget[used] >= job.budget[limit])
+            throw new LocalApiError(
+              409,
+              'BUDGET_EXHAUSTED',
+              'Import request budget exhausted',
+            )
+          job.budget[used]++
+          this.save(job)
+        },
+      }),
     }
   }
   private commit(
@@ -641,6 +697,91 @@ export class ImportRuntime {
     else if (unchanged) job.counts.unchanged++
     else job.counts.updated++
   }
+  private upgradeProgress(job: ImportJob, progress: Progress) {
+    // Old progress keys omitted transaction type. Resolve committed offers from
+    // their migrated keys, so a repeated candidate after restart stays checked
+    // without suppressing a distinct sale/rental variant.
+    for (const kind of ['discovered', 'completed'] as const) {
+      progress[kind] = [
+        ...new Set(
+          progress[kind].flatMap((identity) => {
+            if (identity.startsWith('[')) return [identity]
+            const matches: string[] = []
+            for (const adapter of this.adapters) {
+              const sourceId = adapter.capabilities.sourceId
+              if (!identity.startsWith(`${sourceId}:`)) continue
+              const externalId = identity.slice(sourceId.length + 1)
+              const rows = this.db
+                .prepare(
+                  'SELECT transaction_type FROM offer_keys WHERE source_id=? AND external_id=?',
+                )
+                .all(sourceId, externalId)
+              for (const row of rows)
+                matches.push(
+                  JSON.stringify([sourceId, externalId, row.transaction_type]),
+                )
+              if (kind === 'discovered')
+                for (const candidate of progress.candidates) {
+                  if (
+                    candidate.externalId === externalId &&
+                    sourceId ===
+                      this.adapters[progress.sourceIndex]?.capabilities.sourceId
+                  )
+                    matches.push(
+                      JSON.stringify([
+                        sourceId,
+                        externalId,
+                        candidate.transactionType,
+                      ]),
+                    )
+                }
+            }
+            return matches.length ? matches : [identity]
+          }),
+        ),
+      ]
+    }
+    // Completed also includes rejections. Recover useful work only from this
+    // source's retained successful checks during the interrupted execution.
+    if (progress.sourceSaved === undefined) {
+      const sourceId =
+        this.adapters[progress.sourceIndex]?.capabilities.sourceId
+      progress.sourceSaved = progress.completed.filter((identity) => {
+        if (!identity.startsWith('[')) return false
+        const [completedSource, externalId, transactionType] =
+          JSON.parse(identity)
+        if (completedSource !== sourceId) return false
+        const row = this.db
+          .prepare(
+            'SELECT listings.data FROM listings JOIN offer_keys ON listings.id=offer_keys.listing_id WHERE offer_keys.source_id=? AND offer_keys.external_id=? AND offer_keys.transaction_type=?',
+          )
+          .get(sourceId, externalId, transactionType)
+        if (!row || !job.startedAt) return false
+        const listing: ListingProjection = JSON.parse(String(row.data))
+        return (
+          listing.sourceCheckedAt !== null &&
+          Date.parse(listing.sourceCheckedAt) >= Date.parse(job.startedAt)
+        )
+      }).length
+    }
+  }
+  private async parse<T>(operation: () => T | Promise<T>): Promise<T> {
+    try {
+      return await operation()
+    } catch (error) {
+      if (
+        error instanceof LocalApiError ||
+        this.controller?.signal.aborted ||
+        this.stopping
+      )
+        throw error
+      throw new LocalApiError(
+        400,
+        'PARSE_ERROR',
+        'Source response could not be parsed',
+      )
+    }
+  }
   private async run() {
     if (this.stopping || this.executing) return
     const job = this.claim()
@@ -677,121 +818,229 @@ export class ImportRuntime {
           'Saved source configuration is unavailable',
         )
       const progress: Progress = JSON.parse(String(row.progress))
-      for (
-        ;
-        progress.sourceIndex < this.adapters.length;
-        progress.sourceIndex++
-      ) {
+      this.upgradeProgress(job, progress)
+      job.counts.discovered = progress.discovered.length
+      // Retain the upgrade before outbound work: a later failed transaction
+      // restores this durable progress rather than discarding recovered evidence.
+      this.transaction(() => {
+        this.ensure(job)
+        this.saveProgress(job, progress)
+      })
+      for (; progress.sourceIndex < this.adapters.length;) {
         const adapter = this.adapters[progress.sourceIndex]
         const source = job.sources[progress.sourceIndex]
+        progress.sourceSaved ??= 0
         source.state = 'running'
         const context = this.context(job, adapter)
-        while (true) {
-          this.ensure(job)
-          if (!progress.candidates.length && !progress.exhausted) {
-            job.stage = 'discovering'
-            this.save(job)
-            const page = await adapter.discover(
-              {
-                area: job.area,
-                queryKey: job.scopeKey,
-                cursor: progress.cursor,
-              },
-              context,
+        try {
+          if (adapter.capabilities.geography === 'unsupported')
+            throw new LocalApiError(
+              409,
+              'CONFIGURATION_ERROR',
+              'Source does not support this search geography',
             )
+          while (true) {
             this.ensure(job)
-            progress.candidates = page.candidates
-            progress.candidateIndex = 0
-            progress.cursor = page.nextCursor
-            progress.exhausted = page.exhausted
-            progress.limitation = page.limitation
-            for (const candidate of page.candidates) {
+            if (!progress.candidates.length && !progress.exhausted) {
+              job.stage = 'discovering'
+              this.save(job)
+              progress.visitedCursors ??= []
+              const cursorKey = progress.cursor ?? '<start>'
+              if (progress.visitedCursors.includes(cursorKey))
+                throw new LocalApiError(
+                  400,
+                  'PARSE_ERROR',
+                  'Discovery repeated a cursor',
+                )
+              const page = await this.parse(() =>
+                adapter.discover(
+                  {
+                    area: job.area,
+                    queryKey: job.scopeKey,
+                    cursor: progress.cursor,
+                  },
+                  context,
+                ),
+              )
+              this.ensure(job)
+              if (
+                !page ||
+                !Array.isArray(page.candidates) ||
+                typeof page.exhausted !== 'boolean' ||
+                (page.nextCursor !== null &&
+                  typeof page.nextCursor !== 'string') ||
+                (page.limitation !== null &&
+                  typeof page.limitation !== 'string') ||
+                page.candidates.some(
+                  (candidate) =>
+                    !candidate ||
+                    typeof candidate.externalId !== 'string' ||
+                    typeof candidate.url !== 'string' ||
+                    !['known_inside', 'plausible', 'known_outside'].includes(
+                      candidate.relevance,
+                    ),
+                )
+              )
+                throw new LocalApiError(
+                  400,
+                  'PARSE_ERROR',
+                  'Source discovery could not be parsed',
+                )
+              progress.visitedCursors.push(cursorKey)
+              progress.candidates = page.candidates
+              progress.candidateIndex = 0
+              progress.cursor = page.nextCursor
+              progress.exhausted = page.exhausted
+              progress.limitation = page.limitation
+              for (const candidate of page.candidates) {
+                const identity = JSON.stringify([
+                  adapter.capabilities.sourceId,
+                  candidate.externalId,
+                  candidate.transactionType,
+                ])
+                if (!progress.discovered.includes(identity))
+                  progress.discovered.push(identity)
+              }
+              job.counts.discovered = progress.discovered.length
+              this.transaction(() => this.saveProgress(job, progress))
+            }
+            for (; progress.candidateIndex < progress.candidates.length;) {
+              this.ensure(job)
+              const candidate = progress.candidates[progress.candidateIndex]
               const identity = JSON.stringify([
                 adapter.capabilities.sourceId,
                 candidate.externalId,
                 candidate.transactionType,
               ])
-              if (!progress.discovered.includes(identity))
-                progress.discovered.push(identity)
-            }
-            job.counts.discovered = progress.discovered.length
-            this.transaction(() => this.saveProgress(job, progress))
-          }
-          for (; progress.candidateIndex < progress.candidates.length;) {
-            this.ensure(job)
-            const candidate = progress.candidates[progress.candidateIndex]
-            const identity = JSON.stringify([
-              adapter.capabilities.sourceId,
-              candidate.externalId,
-              candidate.transactionType,
-            ])
-            if (
-              candidate.relevance === 'known_outside' ||
-              progress.completed.includes(identity)
-            ) {
-              progress.candidateIndex++
-              this.saveProgress(job, progress)
-              continue
-            }
-            job.stage = 'fetching'
-            this.save(job)
-            const evidence = await adapter.fetchDetail(candidate, context)
-            this.ensure(job)
-            const normalized = adapter.normalize(evidence)
-            this.ensure(job)
-            job.stage = 'saving'
-            this.save(job)
-            this.transaction(() => {
-              this.ensure(job)
-              job.counts.checked++
-              if (normalized.kind === 'accepted') {
-                try {
-                  this.commit(job, normalized.observation, adapter, candidate)
-                } catch (error) {
-                  // Invalid source facts are a per-offer rejection. SQLite/storage
-                  // failures still escape and roll back the entire transaction.
-                  if (
-                    !(error instanceof LocalApiError) ||
-                    error.code !== 'INVALID_REQUEST'
-                  )
-                    throw error
-                  job.counts.rejected++
-                  source.error = safeError(error)
-                }
-              } else {
-                job.counts.rejected++
-                source.error = normalized.error
+              if (
+                candidate.relevance === 'known_outside' ||
+                (candidate.location?.kind === 'verified' &&
+                  !locationMatchesArea(candidate.location, job.area)) ||
+                progress.completed.includes(identity)
+              ) {
+                progress.candidateIndex++
+                this.saveProgress(job, progress)
+                continue
               }
-              progress.completed.push(identity)
-              progress.candidateIndex++
-              this.saveProgress(job, progress)
-            })
+              job.stage = 'fetching'
+              this.save(job)
+              const evidence = await this.parse(() =>
+                adapter.fetchDetail(candidate, context),
+              )
+              this.ensure(job)
+              const normalized = await this.parse(() =>
+                adapter.normalize(evidence),
+              )
+              this.ensure(job)
+              job.stage = 'saving'
+              this.save(job)
+              this.transaction(() => {
+                this.ensure(job)
+                job.counts.checked++
+                if (normalized.kind === 'accepted') {
+                  try {
+                    this.commit(job, normalized.observation, adapter, candidate)
+                    progress.sourceSaved!++
+                  } catch (error) {
+                    if (
+                      !(error instanceof LocalApiError) ||
+                      error.code !== 'INVALID_REQUEST'
+                    )
+                      throw error
+                    job.counts.rejected++
+                    source.error = safeError(error)
+                  }
+                } else {
+                  job.counts.rejected++
+                  source.error = {
+                    code: 'PARSE_ERROR',
+                    message: 'Source listing could not be parsed',
+                    retryable: false,
+                  }
+                }
+                progress.completed.push(identity)
+                progress.candidateIndex++
+                this.saveProgress(job, progress)
+              })
+            }
+            progress.candidates = []
+            progress.candidateIndex = 0
+            this.saveProgress(job, progress)
+            if (progress.exhausted || progress.limitation) break
+            if (!progress.cursor)
+              throw new LocalApiError(
+                400,
+                'PARSE_ERROR',
+                'Discovery did not provide continuation',
+              )
           }
-          progress.candidates = []
-          progress.candidateIndex = 0
-          this.saveProgress(job, progress)
-          if (progress.exhausted || progress.limitation) break
-          if (!progress.cursor)
-            throw new LocalApiError(
-              400,
-              'PARSE_ERROR',
-              'Discovery did not provide continuation',
-            )
+          source.state =
+            source.error || progress.limitation
+              ? usefulProgress(progress, source.error?.code)
+                ? 'partial'
+                : 'failed'
+              : 'succeeded'
+          source.coverage =
+            progress.exhausted && !progress.limitation && !source.error
+              ? 'complete'
+              : 'partial'
+          if (progress.limitation) job.reasons.push('SOURCE_LIMITATION')
+        } catch (error) {
+          this.ensure(job)
+          Object.assign(job, this.inspect(job.id))
+          Object.assign(
+            progress,
+            JSON.parse(
+              String(
+                this.db
+                  .prepare('SELECT progress FROM import_jobs_v2 WHERE id=?')
+                  .get(job.id)!.progress,
+              ),
+            ),
+          )
+          const failedSource = job.sources[progress.sourceIndex]
+          failedSource.error = safeError(error)
+          failedSource.state = usefulProgress(progress, failedSource.error.code)
+            ? 'partial'
+            : 'failed'
+          failedSource.coverage = 'partial'
+          job.reasons.push(failedSource.error.code)
         }
-        source.state =
-          source.error || progress.limitation ? 'partial' : 'succeeded'
-        source.coverage =
-          progress.exhausted && !progress.limitation ? 'complete' : 'partial'
-        if (progress.limitation) job.reasons.push(progress.limitation)
+        // Retain the interrupted task privately; #6 can consume it without
+        // equating this terminal source outcome with completed discovery.
+        this.db
+          .prepare('INSERT OR REPLACE INTO source_traversals VALUES (?,?,?)')
+          .run(
+            job.id,
+            adapter.capabilities.sourceId,
+            JSON.stringify({
+              ...progress,
+              capabilities: adapter.capabilities,
+              area: job.area,
+              scopeKey: job.scopeKey,
+              outcome: job.sources[progress.sourceIndex],
+            }),
+          )
+        progress.sourceSaved = 0
+        progress.sourceIndex++
+        progress.candidates = []
+        progress.candidateIndex = 0
+        progress.visitedCursors = []
         progress.cursor = null
         progress.exhausted = false
         progress.limitation = null
         this.saveProgress(job, progress)
       }
       this.ensure(job)
-      job.state = job.sources.some((source) => source.state === 'partial')
-        ? 'partial'
-        : 'succeeded'
+      job.state = job.sources.every((source) => source.state === 'succeeded')
+        ? 'succeeded'
+        : job.sources.some(
+              (source) =>
+                source.state === 'succeeded' || source.state === 'partial',
+            )
+          ? 'partial'
+          : 'failed'
+      job.error = job.sources.find((source) => source.error)?.error ?? null
       job.coverage.status = job.sources.every(
         (source) => source.coverage === 'complete',
       )
@@ -834,6 +1083,8 @@ export class ImportRuntime {
         })
       }
     } finally {
+      this.controller?.abort()
+      await this.transportQueue.tail
       clearInterval(this.heartbeat)
       this.db.prepare('DELETE FROM executor_v2 WHERE owner=?').run(this.owner)
       this.executing = false

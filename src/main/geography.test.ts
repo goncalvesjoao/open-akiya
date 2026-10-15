@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ImportRuntime } from './runtime'
+import { testClock } from './test-clock'
 import { syntheticAdapter } from './adapter'
 import { fixtures, uncertainFixtures } from './fixtures'
 import { initialArea } from '../shared/geography'
@@ -11,6 +12,7 @@ import type { AreaQuery } from '../shared/listings'
 let runtime: ImportRuntime
 beforeEach(async () => {
   runtime = new ImportRuntime(':memory:', 0, {
+    ...testClock(),
     adapters: [syntheticAdapter(0, fixtures)],
   })
   for (const area of [
@@ -150,6 +152,7 @@ test('accepts WGS84 extremes and the maximum radius without clamping', async () 
 test('returns both uncertain source-point variants as candidates without claiming true radius membership', async () => {
   const uncertain = uncertainFixtures.slice(0, 2)
   const local = new ImportRuntime(':memory:', 0, {
+    ...testClock(),
     adapters: [syntheticAdapter(0, uncertain)],
   })
   try {
@@ -182,6 +185,7 @@ test('returns only unknown candidates with saved intersecting discovery evidence
   const directory = mkdtempSync(join(tmpdir(), 'akiya-unknown-query-'))
   const database = join(directory, 'listings.sqlite')
   let local = new ImportRuntime(database, 0, {
+    ...testClock(),
     adapters: [syntheticAdapter(0, unknownFixtures)],
   })
   try {
@@ -200,6 +204,7 @@ test('returns only unknown candidates with saved intersecting discovery evidence
     }
     await local.close()
     local = new ImportRuntime(database, 0, {
+      ...testClock(),
       adapters: [syntheticAdapter(0, unknownFixtures)],
     })
     // The precise outside listing was saved, but its broad discovery scope
@@ -286,10 +291,10 @@ test.each([
 
 test('independent saved-area queries preserve check times and never collect or fabricate coverage', async () => {
   let requests = 0
-  let now = Date.parse('2026-10-15T00:00:00.000Z')
+  const clock = testClock(Date.parse('2026-10-15T00:00:00.000Z'))
   const base = syntheticAdapter(0, fixtures)
   const local = new ImportRuntime(':memory:', 0, {
-    now: () => now,
+    ...clock,
     adapters: [
       {
         ...base,
@@ -315,7 +320,7 @@ test('independent saved-area queries preserve check times and never collect or f
       .toBe('succeeded')
     const beforeRequests = requests
     const budget = local.inspect(request.jobIds[0]).budget
-    now = Date.parse('2026-10-16T00:00:00.000Z')
+    clock.advance(Date.parse('2026-10-16T00:00:00.000Z') - clock.now())
     const result = local.results({
       area: { center: { latitude: 35, longitude: 135 }, radiusKm: 1 },
       showUnavailable: false,
@@ -325,9 +330,9 @@ test('independent saved-area queries preserve check times and never collect or f
       result.listings.map((listing) => listing.sourceRefs[0].externalId),
     ).toEqual(['sale-1', 'rent-1', 'unknown-1'])
     expect(result.listings.map((listing) => listing.sourceCheckedAt)).toEqual([
-      '2026-10-15T00:00:00.000Z',
-      '2026-10-15T00:00:00.000Z',
-      '2026-10-15T00:00:00.000Z',
+      '2026-10-15T00:00:02.000Z',
+      '2026-10-15T00:00:04.000Z',
+      '2026-10-15T00:00:06.000Z',
     ])
     expect(result.coverage).toMatchObject({
       status: 'unknown',

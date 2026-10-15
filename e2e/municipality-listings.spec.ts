@@ -5,6 +5,9 @@ import { join } from 'node:path'
 
 // Leaflet marker placement, focus and Electron external navigation need a browser.
 test('explores municipality summary markers and list-only groups without house pins', async () => {
+  // Ten fixture details are paced at two seconds each. Preserve production
+  // traffic controls and allow the import to reach these later fixtures.
+  test.setTimeout(60000)
   const directory = mkdtempSync(join(tmpdir(), 'akiya-municipality-'))
   const application = await electron.launch({
     args: [
@@ -23,7 +26,7 @@ test('explores municipality summary markers and list-only groups without house p
     })
     await expect(
       group.getByText('Sample municipality · 2 listings', { exact: true }),
-    ).toBeVisible()
+    ).toBeVisible({ timeout: 30000 })
     await page.getByRole('button', { name: 'Zoom out' }).click()
     const pin = page.getByRole('button', {
       name: 'Municipality summary: Sample municipality · 2 listings',
@@ -36,7 +39,7 @@ test('explores municipality summary markers and list-only groups without house p
     // replaces marker data and is independent of editing coordinate drafts.
     await expect(
       page.getByRole('list', { name: 'Import queue' }).getByRole('listitem'),
-    ).toHaveCount(0)
+    ).toHaveCount(0, { timeout: 30000 })
     await expect(page.getByText('Loading listings…')).toHaveCount(0)
     // Draft edits must preserve real Leaflet markers for subsequent keyboard activation.
     const marker = await pin.elementHandle()

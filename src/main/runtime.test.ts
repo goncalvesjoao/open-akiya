@@ -5,17 +5,17 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ImportRuntime } from './runtime'
+import { testClock } from './test-clock'
 import { syntheticAdapter, type SourceAdapter } from './adapter'
 import { initialArea } from '../shared/geography'
 
 const directory = mkdtempSync(join(tmpdir(), 'akiya-runtime-'))
 const runtimes: ImportRuntime[] = []
 function open(name: string, delay = 1, adapters?: SourceAdapter[]) {
-  const runtime = new ImportRuntime(
-    join(directory, name),
-    delay,
-    adapters ? { adapters } : {},
-  )
+  const runtime = new ImportRuntime(join(directory, name), delay, {
+    ...testClock(),
+    ...(adapters ? { adapters } : {}),
+  })
   runtimes.push(runtime)
   return runtime
 }
@@ -177,63 +177,113 @@ test('rejects invalid area shapes and disabled sources before adapter calls', ()
   )
 })
 
-test('restarts after a committed offer and resumes saved progress without duplicate additions', async () => {
-  let secondDetail = false
-  const base = syntheticAdapter(10)
-  const adapter: SourceAdapter = {
-    ...base,
-    async discover(input, context) {
-      const page = await base.discover(input, context)
-      return {
-        ...page,
-        candidates: [
-          ...page.candidates,
+test.each([false, true])(
+  'legacy restart preserves committed progress when resumed detail fails: %s',
+  async (failOnResume) => {
+    let secondDetail = false
+    const base = syntheticAdapter(10)
+    const adapter: SourceAdapter = {
+      ...base,
+      async discover(input, context) {
+        const page = await base.discover(input, context)
+        return {
+          ...page,
+          candidates: [
+            ...page.candidates,
+            {
+              ...page.candidates[0],
+              externalId: 'sale-2',
+              url: 'https://example.invalid/offers/sale-2',
+            },
+            ...page.candidates,
+          ],
+        }
+      },
+      async fetchDetail(candidate, context) {
+        if (candidate.externalId === 'sale-2') {
+          secondDetail = true
+          await new Promise<void>((resolve) => {
+            if (context.signal.aborted) resolve()
+            else
+              context.signal.addEventListener('abort', () => resolve(), {
+                once: true,
+              })
+          })
+          context.signal.throwIfAborted()
+        }
+        return base.fetchDetail(candidate, context)
+      },
+    }
+    const databaseName = `recovery-${failOnResume}.sqlite`
+    const runtime = open(databaseName, 1, [adapter])
+    const request = runtime.createRequest(input)
+    await expect.poll(() => secondDetail).toBe(true)
+    expect(runtime.inspect(request.jobIds[0]).counts).toMatchObject({
+      added: 1,
+      checked: 1,
+    })
+    const firstSaved = runtime.results(query).listings[0]
+    await runtime.close()
+    // A job committed by the pre-transaction-identity worker retains legacy
+    // progress keys. Upgrading must preserve its already committed accounting.
+    const legacy = new DatabaseSync(join(directory, databaseName))
+    const progress = JSON.parse(
+      String(
+        legacy
+          .prepare('SELECT progress FROM import_jobs_v2 WHERE id=?')
+          .get(request.jobIds[0])!.progress,
+      ),
+    )
+    delete progress.sourceSaved
+    for (const key of ['discovered', 'completed'])
+      progress[key] = progress[key].map((identity: string) => {
+        const [sourceId, externalId] = JSON.parse(identity)
+        return `${sourceId}:${externalId}`
+      })
+    legacy
+      .prepare('UPDATE import_jobs_v2 SET progress=? WHERE id=?')
+      .run(JSON.stringify(progress), request.jobIds[0])
+    legacy.close()
+    const reopened = open(databaseName, 1, [
+      {
+        ...adapter,
+        fetchDetail: failOnResume
+          ? async () => {
+              throw new Error('synthetic parser failure')
+            }
+          : base.fetchDetail,
+      },
+    ])
+    if (failOnResume) {
+      await expect
+        .poll(() => reopened.inspect(request.jobIds[0]).state)
+        .toBe('partial')
+      expect(reopened.inspect(request.jobIds[0])).toMatchObject({
+        counts: { checked: 1, added: 1 },
+        sources: [
           {
-            ...page.candidates[0],
-            externalId: 'sale-2',
-            url: 'https://example.invalid/offers/sale-2',
+            sourceId: 'fixture',
+            state: 'partial',
+            error: { code: 'PARSE_ERROR' },
           },
         ],
-      }
-    },
-    async fetchDetail(candidate, context) {
-      if (candidate.externalId === 'sale-2') {
-        secondDetail = true
-        await new Promise<void>((resolve) => {
-          if (context.signal.aborted) resolve()
-          else
-            context.signal.addEventListener('abort', () => resolve(), {
-              once: true,
-            })
-        })
-        context.signal.throwIfAborted()
-      }
-      return base.fetchDetail(candidate, context)
-    },
-  }
-  const runtime = open('recovery.sqlite', 1, [adapter])
-  const request = runtime.createRequest(input)
-  await expect.poll(() => secondDetail).toBe(true)
-  expect(runtime.inspect(request.jobIds[0]).counts).toMatchObject({
-    added: 1,
-    checked: 1,
-  })
-  const firstSaved = runtime.results(query).listings[0]
-  await runtime.close()
-  const reopened = open('recovery.sqlite', 1, [
-    { ...adapter, fetchDetail: base.fetchDetail },
-  ])
-  expect(await completed(reopened, request.jobIds[0])).toMatchObject({
-    counts: { discovered: 2, checked: 2, added: 2, unchanged: 0 },
-  })
-  expect(reopened.createRequest(input).id).toBe(request.id)
-  expect(reopened.results(query).listings).toHaveLength(2)
-  expect(
-    reopened
-      .results(query)
-      .listings.find((listing) => listing.id === firstSaved.id)?.firstSeenAt,
-  ).toBe(firstSaved.firstSeenAt)
-})
+        coverage: { status: 'partial' },
+      })
+      expect(reopened.results(query).listings).toEqual([firstSaved])
+      return
+    }
+    expect(await completed(reopened, request.jobIds[0])).toMatchObject({
+      counts: { discovered: 2, checked: 2, added: 2, unchanged: 0 },
+    })
+    expect(reopened.createRequest(input).id).toBe(request.id)
+    expect(reopened.results(query).listings).toHaveLength(2)
+    expect(
+      reopened
+        .results(query)
+        .listings.find((listing) => listing.id === firstSaved.id)?.firstSeenAt,
+    ).toBe(firstSaved.firstSeenAt)
+  },
+)
 
 test('queued and running cancellation retains saved results and never restarts cancelled jobs', async () => {
   const runtime = open('cancel.sqlite', 100)
@@ -328,7 +378,7 @@ test.each(['floorAreaM2', 'landAreaM2'] as const)(
     const rejected = runtime.createRequest(input)
     await expect
       .poll(() => runtime.inspect(rejected.jobIds[0]).state)
-      .toBe('partial')
+      .toBe('failed')
     expect(runtime.inspect(rejected.jobIds[0])).toMatchObject({
       counts: { checked: 1, rejected: 1, added: 0, updated: 0, unchanged: 0 },
       sources: [{ error: { code: 'INVALID_REQUEST' } }],
@@ -560,7 +610,10 @@ test('rejects new verified observations with blank verification evidence', async
         result.kind === 'accepted' &&
         result.observation.fields.location?.kind === 'verified'
       ) {
-        result.observation.fields.location.evidence = '   '
+        result.observation.fields.location = {
+          ...result.observation.fields.location,
+          evidence: '   ',
+        }
       }
       return result
     },
@@ -569,10 +622,67 @@ test('rejects new verified observations with blank verification evidence', async
   const request = runtime.createRequest(input)
   await expect
     .poll(() => runtime.inspect(request.jobIds[0]).state)
-    .toBe('partial')
+    .toBe('failed')
   expect(runtime.inspect(request.jobIds[0])).toMatchObject({
     counts: { added: 0, checked: 1, rejected: 1 },
-    sources: [{ state: 'partial', error: { code: 'INVALID_REQUEST' } }],
+    error: { code: 'INVALID_REQUEST' },
+    sources: [{ state: 'failed', error: { code: 'INVALID_REQUEST' } }],
   })
   expect(runtime.results(query).listings).toEqual([])
+})
+
+test('legacy recovery does not attribute another source committed work to a failed source', async () => {
+  let waiting = false
+  const base = syntheticAdapter(0)
+  const other: SourceAdapter = {
+    ...base,
+    capabilities: { ...base.capabilities, sourceId: 'other' },
+    async fetchDetail(_candidate, context) {
+      waiting = true
+      await new Promise<void>((resolve) =>
+        context.signal.addEventListener('abort', () => resolve(), {
+          once: true,
+        }),
+      )
+      context.signal.throwIfAborted()
+      throw new Error('unreachable')
+    },
+  }
+  const runtime = open('legacy-sources.sqlite', 0, [base, other])
+  const request = runtime.createRequest(input)
+  await expect.poll(() => waiting).toBe(true)
+  await runtime.close()
+  const database = new DatabaseSync(join(directory, 'legacy-sources.sqlite'))
+  const progress = JSON.parse(
+    String(
+      database
+        .prepare('SELECT progress FROM import_jobs_v2 WHERE id=?')
+        .get(request.jobIds[0])!.progress,
+    ),
+  )
+  delete progress.sourceSaved
+  database
+    .prepare('UPDATE import_jobs_v2 SET progress=? WHERE id=?')
+    .run(JSON.stringify(progress), request.jobIds[0])
+  database.close()
+  const reopened = open('legacy-sources.sqlite', 0, [
+    base,
+    {
+      ...other,
+      async fetchDetail() {
+        throw new Error('synthetic parser failure')
+      },
+    },
+  ])
+  await expect
+    .poll(() => reopened.inspect(request.jobIds[0]).stage)
+    .toBe('finished')
+  expect(reopened.inspect(request.jobIds[0])).toMatchObject({
+    state: 'partial',
+    counts: { added: 1, checked: 1 },
+    sources: [
+      { sourceId: 'fixture', state: 'succeeded' },
+      { sourceId: 'other', state: 'failed', error: { code: 'PARSE_ERROR' } },
+    ],
+  })
 })
