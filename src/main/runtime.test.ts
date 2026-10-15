@@ -193,6 +193,7 @@ test('restarts after a committed offer and resumes saved progress without duplic
             externalId: 'sale-2',
             url: 'https://example.invalid/offers/sale-2',
           },
+          ...page.candidates,
         ],
       }
     },
@@ -220,6 +221,25 @@ test('restarts after a committed offer and resumes saved progress without duplic
   })
   const firstSaved = runtime.results(query).listings[0]
   await runtime.close()
+  // A job committed by the pre-transaction-identity worker retains legacy
+  // progress keys. Upgrading must preserve its already committed accounting.
+  const legacy = new DatabaseSync(join(directory, 'recovery.sqlite'))
+  const progress = JSON.parse(
+    String(
+      legacy
+        .prepare('SELECT progress FROM import_jobs_v2 WHERE id=?')
+        .get(request.jobIds[0])!.progress,
+    ),
+  )
+  for (const key of ['discovered', 'completed'])
+    progress[key] = progress[key].map((identity: string) => {
+      const [sourceId, externalId] = JSON.parse(identity)
+      return `${sourceId}:${externalId}`
+    })
+  legacy
+    .prepare('UPDATE import_jobs_v2 SET progress=? WHERE id=?')
+    .run(JSON.stringify(progress), request.jobIds[0])
+  legacy.close()
   const reopened = open('recovery.sqlite', 1, [
     { ...adapter, fetchDetail: base.fetchDetail },
   ])
@@ -330,8 +350,8 @@ test.each(['floorAreaM2', 'landAreaM2'] as const)(
       .poll(() => runtime.inspect(rejected.jobIds[0]).state)
       .toBe('failed')
     expect(runtime.inspect(rejected.jobIds[0])).toMatchObject({
-      counts: { checked: 0, added: 0, updated: 0, unchanged: 0 },
-      error: { code: 'INVALID_REQUEST' },
+      counts: { checked: 1, rejected: 1, added: 0, updated: 0, unchanged: 0 },
+      sources: [{ error: { code: 'INVALID_REQUEST' } }],
     })
     expect(runtime.results(query).listings).toEqual([])
     await runtime.close()
@@ -413,4 +433,31 @@ test('an idle worker waits for a foreign lease to expire before recovering saved
     await runtime.close()
     vi.useRealTimers()
   }
+})
+
+test('rejects new verified observations with blank verification evidence', async () => {
+  const base = syntheticAdapter(0)
+  const adapter: SourceAdapter = {
+    ...base,
+    normalize(evidence) {
+      const result = base.normalize(evidence)
+      if (
+        result.kind === 'accepted' &&
+        result.observation.fields.location?.kind === 'verified'
+      ) {
+        result.observation.fields.location.evidence = '   '
+      }
+      return result
+    },
+  }
+  const runtime = open('empty-location-evidence.sqlite', 0, [adapter])
+  const request = runtime.createRequest(input)
+  await expect
+    .poll(() => runtime.inspect(request.jobIds[0]).state)
+    .toBe('failed')
+  expect(runtime.inspect(request.jobIds[0])).toMatchObject({
+    counts: { added: 0, checked: 1, rejected: 1 },
+    error: { code: 'INVALID_REQUEST' },
+  })
+  expect(runtime.results(query).listings).toEqual([])
 })

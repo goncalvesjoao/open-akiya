@@ -18,7 +18,7 @@ import {
   type NormalizedFields,
 } from './adapter'
 import { invalid, LocalApiError, safeError } from './errors'
-import { listingProjection } from './projection'
+import { listingProjection, savedListingProjection } from './projection'
 import { municipalityReference } from './municipalities'
 import { locationMatchesArea } from './listing-area'
 import type { MunicipalityGroup } from '../shared/listings'
@@ -55,7 +55,9 @@ type Progress = {
 function usefulProgress(progress: Progress, errorCode?: string): boolean {
   return (
     (progress.sourceSaved ?? 0) > 0 ||
-    (!['INVALID_REQUEST', 'PARSE_ERROR'].includes(errorCode ?? '') &&
+    (!['INVALID_REQUEST', 'PARSE_ERROR', 'INTERNAL_ERROR'].includes(
+      errorCode ?? '',
+    ) &&
       (progress.candidateIndex < progress.candidates.length ||
         (!progress.exhausted && progress.cursor !== null)))
   )
@@ -111,6 +113,9 @@ export class ImportRuntime {
       CREATE TABLE IF NOT EXISTS source_host_limits (host TEXT PRIMARY KEY, next_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS source_traversals (job_id TEXT NOT NULL, source_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(job_id,source_id));
       CREATE TABLE IF NOT EXISTS source_task_state (job_id TEXT NOT NULL, source_id TEXT NOT NULL, retry_at INTEGER, PRIMARY KEY(job_id,source_id));
+      CREATE TABLE IF NOT EXISTS offer_keys (source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, listing_id TEXT NOT NULL REFERENCES listings(id), PRIMARY KEY(source_id,external_id,transaction_type));
+      INSERT OR IGNORE INTO offer_keys SELECT source_id, coalesce(json_extract(data,'$.sourceRefs[0].externalId'),external_id), json_extract(data,'$.transactionType'),id FROM listings;
+      CREATE TABLE IF NOT EXISTS offer_observations (source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id,external_id,transaction_type));
       CREATE TABLE IF NOT EXISTS observations (source_id TEXT NOT NULL, external_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id,external_id));`)
     this.schedule()
   }
@@ -327,7 +332,7 @@ export class ImportRuntime {
     const listings: ListingProjection[] = this.db
       .prepare('SELECT data FROM listings')
       .all()
-      .map((row) => listingProjection(JSON.parse(String(row.data))))
+      .map((row) => savedListingProjection(JSON.parse(String(row.data))))
     const visible = listings.filter(
       (listing) =>
         (showUnavailable || listing.availability !== 'unavailable') &&
@@ -503,9 +508,27 @@ export class ImportRuntime {
       observation.identity.externalId !== candidate.externalId ||
       observation.url !== candidate.url ||
       !observation.contentHash ||
-      !Number.isFinite(Date.parse(observation.sourceCheckedAt))
+      typeof observation.sourceCheckedAt !== 'string' ||
+      !Number.isFinite(Date.parse(observation.sourceCheckedAt)) ||
+      !record(observation.fields) ||
+      !record(observation.provenance)
     )
       invalid('Invalid source observation')
+    identifier(observation.identity.externalId)
+    let url: URL
+    try {
+      url = new URL(observation.url)
+    } catch {
+      invalid('Invalid source URL')
+    }
+    if (
+      !['https:', 'http:'].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      !adapter.capabilities.allowedHosts.includes(url.hostname) ||
+      !['sale', 'rent', 'both', 'unknown'].includes(candidate.transactionType)
+    )
+      invalid('Invalid source offer identity')
     const fieldNames: (keyof NormalizedFields)[] = [
       'titleJa',
       'transactionType',
@@ -538,11 +561,41 @@ export class ImportRuntime {
     )
       invalid('Invalid source money')
     const prior = this.db
-      .prepare('SELECT data FROM listings WHERE source_id=? AND external_id=?')
-      .get(observation.identity.sourceId, observation.identity.externalId)
+      .prepare(
+        'SELECT listings.data FROM listings JOIN offer_keys ON listings.id=offer_keys.listing_id WHERE offer_keys.source_id=? AND offer_keys.external_id=? AND transaction_type=?',
+      )
+      .get(
+        observation.identity.sourceId,
+        observation.identity.externalId,
+        candidate.transactionType,
+      )
     const previous: ListingProjection | undefined = prior
       ? JSON.parse(String(prior.data))
       : undefined
+    const removalEvidence = (key: keyof NormalizedFields) =>
+      typeof observation.provenance[key] === 'string' &&
+      observation.provenance[key].trim().length > 0
+    for (const key of fieldNames) {
+      const field = fields[key]
+      if (typeof field === 'string' && !field.trim())
+        invalid('Invalid blank source text')
+      // Null is a removal only when the adapter supplies field-specific evidence.
+      if (previous && fields[key] === null && !removalEvidence(key))
+        delete fields[key]
+    }
+    if (previous && fields.availability === 'unknown')
+      delete fields.availability
+    if (
+      previous &&
+      fields.location?.kind === 'unknown' &&
+      !removalEvidence('location')
+    )
+      delete fields.location
+    if (
+      fields.transactionType !== undefined &&
+      fields.transactionType !== candidate.transactionType
+    )
+      invalid('Source offer transaction identity changed')
     const source = {
       sourceId: observation.identity.sourceId,
       externalId: observation.identity.externalId,
@@ -554,7 +607,7 @@ export class ImportRuntime {
       titleJa: '',
       sourceRefs: [source],
       primarySourceUrl: observation.url,
-      transactionType: 'unknown',
+      transactionType: candidate.transactionType,
       salePriceJpy: null,
       rentMonthlyJpy: null,
       priceNoteJa: null,
@@ -582,29 +635,51 @@ export class ImportRuntime {
       )
     )
       invalid('Invalid normalized listing')
-    const oldObservation = this.db
-      .prepare(
-        'SELECT data FROM observations WHERE source_id=? AND external_id=?',
-      )
-      .get(source.sourceId, source.externalId)
+    const businessFields = (value: ListingProjection) =>
+      JSON.stringify(fieldNames.map((key) => value[key]))
     const unchanged =
-      oldObservation &&
-      JSON.parse(String(oldObservation.data)).contentHash ===
-        observation.contentHash
+      previous && businessFields(previous) === businessFields(listing)
     this.db
       .prepare(
-        'INSERT INTO observations VALUES (?,?,?) ON CONFLICT(source_id,external_id) DO UPDATE SET data=excluded.data',
+        'INSERT INTO offer_observations VALUES (?,?,?,?) ON CONFLICT(source_id,external_id,transaction_type) DO UPDATE SET data=excluded.data',
       )
-      .run(source.sourceId, source.externalId, JSON.stringify(observation))
+      .run(
+        source.sourceId,
+        source.externalId,
+        candidate.transactionType,
+        JSON.stringify({
+          ...observation,
+          contentHash: createHash('sha256')
+            .update(businessFields(listing))
+            .digest('hex'),
+          fields: Object.fromEntries(
+            fieldNames.map((key) => [key, listing[key]]),
+          ),
+        }),
+      )
     this.db
       .prepare(
-        'INSERT INTO listings VALUES (?,?,?,?) ON CONFLICT(source_id,external_id) DO UPDATE SET data=excluded.data',
+        'INSERT INTO listings VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
       )
       .run(
         listing.id,
         source.sourceId,
+        previous
+          ? String(
+              this.db
+                .prepare('SELECT external_id FROM listings WHERE id=?')
+                .get(previous.id)!.external_id,
+            )
+          : listing.id,
+        JSON.stringify({ ...previous, ...listing }),
+      )
+    this.db
+      .prepare('INSERT OR IGNORE INTO offer_keys VALUES (?,?,?,?)')
+      .run(
+        source.sourceId,
         source.externalId,
-        JSON.stringify(listing),
+        candidate.transactionType,
+        listing.id,
       )
     this.db
       .prepare('INSERT OR IGNORE INTO listing_discovery_areas VALUES (?,?)')
@@ -612,6 +687,51 @@ export class ImportRuntime {
     if (!previous) job.counts.added++
     else if (unchanged) job.counts.unchanged++
     else job.counts.updated++
+  }
+  private upgradeProgressIdentities(progress: Progress) {
+    // Old progress keys omitted transaction type. Resolve committed offers from
+    // their migrated keys, so a repeated candidate after restart stays checked
+    // without suppressing a distinct sale/rental variant.
+    for (const kind of ['discovered', 'completed'] as const) {
+      progress[kind] = [
+        ...new Set(
+          progress[kind].flatMap((identity) => {
+            if (identity.startsWith('[')) return [identity]
+            const matches: string[] = []
+            for (const adapter of this.adapters) {
+              const sourceId = adapter.capabilities.sourceId
+              if (!identity.startsWith(`${sourceId}:`)) continue
+              const externalId = identity.slice(sourceId.length + 1)
+              const rows = this.db
+                .prepare(
+                  'SELECT transaction_type FROM offer_keys WHERE source_id=? AND external_id=?',
+                )
+                .all(sourceId, externalId)
+              for (const row of rows)
+                matches.push(
+                  JSON.stringify([sourceId, externalId, row.transaction_type]),
+                )
+              if (kind === 'discovered')
+                for (const candidate of progress.candidates) {
+                  if (
+                    candidate.externalId === externalId &&
+                    sourceId ===
+                      this.adapters[progress.sourceIndex]?.capabilities.sourceId
+                  )
+                    matches.push(
+                      JSON.stringify([
+                        sourceId,
+                        externalId,
+                        candidate.transactionType,
+                      ]),
+                    )
+                }
+            }
+            return matches.length ? matches : [identity]
+          }),
+        ),
+      ]
+    }
   }
   private async parse<T>(operation: () => T | Promise<T>): Promise<T> {
     try {
@@ -666,6 +786,8 @@ export class ImportRuntime {
           'Saved source configuration is unavailable',
         )
       const progress: Progress = JSON.parse(String(row.progress))
+      this.upgradeProgressIdentities(progress)
+      job.counts.discovered = progress.discovered.length
       for (; progress.sourceIndex < this.adapters.length;) {
         const adapter = this.adapters[progress.sourceIndex]
         const source = job.sources[progress.sourceIndex]
@@ -733,7 +855,11 @@ export class ImportRuntime {
               progress.exhausted = page.exhausted
               progress.limitation = page.limitation
               for (const candidate of page.candidates) {
-                const identity = `${adapter.capabilities.sourceId}:${candidate.externalId}`
+                const identity = JSON.stringify([
+                  adapter.capabilities.sourceId,
+                  candidate.externalId,
+                  candidate.transactionType,
+                ])
                 if (!progress.discovered.includes(identity))
                   progress.discovered.push(identity)
               }
@@ -743,7 +869,11 @@ export class ImportRuntime {
             for (; progress.candidateIndex < progress.candidates.length;) {
               this.ensure(job)
               const candidate = progress.candidates[progress.candidateIndex]
-              const identity = `${adapter.capabilities.sourceId}:${candidate.externalId}`
+              const identity = JSON.stringify([
+                adapter.capabilities.sourceId,
+                candidate.externalId,
+                candidate.transactionType,
+              ])
               if (
                 candidate.relevance === 'known_outside' ||
                 (candidate.location?.kind === 'verified' &&
@@ -769,8 +899,18 @@ export class ImportRuntime {
                 this.ensure(job)
                 job.counts.checked++
                 if (normalized.kind === 'accepted') {
-                  this.commit(job, normalized.observation, adapter, candidate)
-                  progress.sourceSaved!++
+                  try {
+                    this.commit(job, normalized.observation, adapter, candidate)
+                    progress.sourceSaved!++
+                  } catch (error) {
+                    if (
+                      !(error instanceof LocalApiError) ||
+                      error.code !== 'INVALID_REQUEST'
+                    )
+                      throw error
+                    job.counts.rejected++
+                    source.error = safeError(error)
+                  }
                 } else {
                   job.counts.rejected++
                   source.error = {
@@ -809,6 +949,16 @@ export class ImportRuntime {
         } catch (error) {
           this.ensure(job)
           Object.assign(job, this.inspect(job.id))
+          Object.assign(
+            progress,
+            JSON.parse(
+              String(
+                this.db
+                  .prepare('SELECT progress FROM import_jobs_v2 WHERE id=?')
+                  .get(job.id)!.progress,
+              ),
+            ),
+          )
           const failedSource = job.sources[progress.sourceIndex]
           failedSource.error = safeError(error)
           failedSource.state = usefulProgress(progress, failedSource.error.code)

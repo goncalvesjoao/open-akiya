@@ -242,3 +242,114 @@ test('returns only unknown candidates with saved intersecting discovery evidence
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test.each([
+  {},
+  { evidence: '', verifiedAt: '2026-10-15T00:00:00.000Z' },
+  { evidence: '   ', verifiedAt: '2026-10-15T00:00:00.000Z' },
+  { evidence: 'Historical position', verifiedAt: 'invalid' },
+])(
+  'reads legacy coordinates without valid verification evidence as unverified source points (%j)',
+  async (verification) => {
+    const { DatabaseSync } = await import('node:sqlite')
+    const directory = mkdtempSync(join(tmpdir(), 'akiya-legacy-location-'))
+    const path = join(directory, 'listings.sqlite')
+    const setup = new ImportRuntime(path)
+    await setup.close()
+    const database = new DatabaseSync(path)
+    // Historical records can claim verified while lacking the evidence now
+    // required by the DTO. Seed persistence, observe only the public worker API.
+    const legacy = {
+      ...fixtures[0],
+      location: {
+        kind: 'verified',
+        point: { latitude: 35, longitude: 135 },
+        ...verification,
+      },
+    }
+    database
+      .prepare('INSERT INTO listings VALUES (?,?,?,?)')
+      .run(legacy.id, 'fixture', 'legacy', JSON.stringify(legacy))
+    database.close()
+    const local = new ImportRuntime(path)
+    try {
+      expect(
+        local.results({ area: initialArea, showUnavailable: false }).listings[0]
+          .location,
+      ).toEqual({
+        kind: 'unverified',
+        point: { latitude: 35, longitude: 135 },
+        precision: 'unknown',
+        sourceId: 'fixture',
+      })
+    } finally {
+      await local.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  },
+)
+
+test('independent saved-area queries preserve check times and never collect or fabricate coverage', async () => {
+  let requests = 0
+  const clock = testClock(Date.parse('2026-10-15T00:00:00.000Z'))
+  const base = syntheticAdapter(0, fixtures)
+  const local = new ImportRuntime(':memory:', 0, {
+    ...clock,
+    adapters: [
+      {
+        ...base,
+        async discover(input, context) {
+          requests++
+          return base.discover(input, context)
+        },
+        async fetchDetail(candidate, context) {
+          requests++
+          return base.fetchDetail(candidate, context)
+        },
+      },
+    ],
+  })
+  try {
+    const request = local.createRequest({
+      area: initialArea,
+      intent: 'import',
+      idempotencyKey: 'read-only',
+    })
+    await expect
+      .poll(() => local.inspect(request.jobIds[0]).state)
+      .toBe('succeeded')
+    const beforeRequests = requests
+    const budget = local.inspect(request.jobIds[0]).budget
+    clock.advance(Date.parse('2026-10-16T00:00:00.000Z') - clock.now())
+    const result = local.results({
+      area: { center: { latitude: 35, longitude: 135 }, radiusKm: 1 },
+      showUnavailable: false,
+    })
+    expect(result.area.radiusKm).toBe(1)
+    expect(
+      result.listings.map((listing) => listing.sourceRefs[0].externalId),
+    ).toEqual(['sale-1', 'rent-1', 'unknown-1'])
+    expect(result.listings.map((listing) => listing.sourceCheckedAt)).toEqual([
+      '2026-10-15T00:00:02.000Z',
+      '2026-10-15T00:00:04.000Z',
+      '2026-10-15T00:00:06.000Z',
+    ])
+    expect(result.coverage).toMatchObject({
+      status: 'unknown',
+      lastSuccessfulCheckAt: null,
+      freshUntil: null,
+      scopeKey: null,
+    })
+    expect(result.generatedAt).toBe('2026-10-16T00:00:00.000Z')
+    expect(
+      local.results({
+        area: { center: { latitude: 36, longitude: 135 }, radiusKm: 1 },
+        showUnavailable: false,
+      }).listings,
+    ).toEqual([])
+    expect(requests).toBe(beforeRequests)
+    expect(local.inspect(request.jobIds[0]).budget).toEqual(budget)
+  } finally {
+    await local.close()
+  }
+})
