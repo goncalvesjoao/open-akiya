@@ -49,6 +49,8 @@ The production output is `dist/`, suitable for static hosting. Set the Supabase 
 
 Ideas, bug reports, local akiya sources, translations, and code contributions are welcome through [GitHub issues](https://github.com/goncalvesjoao/open-akiya/issues) and pull requests. Keep source attribution and the Japanese originals when adding listing support. Check source terms and reuse permissions before collecting or republishing data.
 
+See the [implementation plan](docs/implementation-plan.md) for parallel workstreams, shared contracts, and integration gates for the map and local area imports.
+
 ## License
 
 [MIT](LICENSE). The project’s license covers its code; third-party listings and images retain their respective rights.

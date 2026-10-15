@@ -1,0 +1,66 @@
+# Map, listing pins, and bounded area selection
+
+Part of #1. Can start immediately and run alongside #5 after shared contract alignment; no import service or live source dependency. See the [implementation plan](../implementation-plan.md).
+
+## Problem Statement
+
+Open Akiya currently offers a landing page rather than a way to explore listings geographically. Users need a map and a clear area selection before they can request an area import.
+
+## Solution
+
+Provide a responsive map and companion results list using clearly labeled synthetic listings. Users select a center and a positive radius up to 10 km, inspect listing details and source links, and understand location uncertainty. This creates the interaction and presentation foundation for later import jobs.
+
+## User Stories
+
+1. As a user, I want to open an interactive map, so that I can explore Japan geographically.
+2. As a user, I want to pan and zoom, so that I can reach an area of interest.
+3. As a user, I want to select an area center, so that I can define where to search.
+4. As a keyboard user, I want labeled center-coordinate controls, so that selection does not require pointer gestures.
+5. As a user, I want to set a positive radius up to 10 km, so that the scope stays bounded.
+6. As a user, I want a visible search circle and radius value, so that I understand the selected area.
+7. As a user, I want invalid values explained without changing the valid selection, so that errors are recoverable.
+8. As a user, I want listing pins and a matching results list, so that I can explore spatially or textually.
+9. As a user, I want to select a pin or list entry, so that I can inspect the same property's details.
+10. As a user, I want Japanese titles and source links, so that I can verify information.
+11. As a user, I want sale, rent, unknown price, and free distinguished, so that amounts are understandable.
+12. As a user, I want source-provided positions shown as individual pins with unverified or approximate labels where appropriate, so that I can explore them without mistaking them for verified house locations.
+13. As a user, I want loading, empty, and error states, so that I understand missing results.
+14. As a mobile user, I want usable map controls and readable details, so that I can explore on a small screen.
+15. As a user, I want sample data clearly labeled, so that I do not mistake demonstrations for real offers.
+16. As a user, I want selection and navigation to make no collection requests, so that exploration does not trigger scraping.
+17. As a user, I want a distinct municipality summary pin with a count and expandable listing list, so that I can explore offers known only to municipality level.
+18. As a user, I want unknown-location offers accessible without a fabricated pin, so that I can still inspect their source information.
+19. As a user, I want unavailable offers hidden by default but accessible through Show unavailable, so that I can explore current offers without losing history.
+
+## Implementation Decisions
+
+- Build on the existing React/TypeScript app and retain a clear route or navigation back to project information. No backend is required for this milestone.
+- Choose a map library and tile provider during implementation; document attribution, configuration, network requirements, and any required user key. Locally running does not mean offline tiles. Do not require browser geolocation.
+- Represent the selected area with center latitude/longitude and radius in kilometres; validate finite coordinates and a radius greater than zero and at most 10. Provide pointer selection and labeled keyboard-operable coordinate/radius controls.
+- The circle represents geographic distance, not a screen-space approximation. Include the boundary in the precise-location result filter. Selection changes update displayed sample results but never create import jobs.
+- Define a replaceable listing-query boundary whose initial implementation returns synthetic fixtures. Its input is the area; its output distinguishes verified in-area positions, source-provided unverified/approximate positions, municipality-only groups, and unknown-location candidates, with freshness and coverage metadata reserved for later integration. An empty collection is different from a failed query.
+- Use stable listing identifiers, Japanese title, original source reference, sale/rent amounts, availability, and location precision. Missing money is unknown; zero is explicitly free. Avoid inventing coordinates, translations, or source data. Use synthetic identifiers and clearly non-real fixture content.
+- Keep pin selection and list selection synchronized. Show the same details and original-source action from either. Show individual pins at source-provided coordinates even if unverified, using distinct styling and a Location unverified label. Approximate positions also explain that distance from the selected center is uncertain; coordinate-based candidate inclusion is not verified radius membership.
+- Group offers with only municipality-level locations by municipality intersecting the selected circle. Use a distinct municipality summary pin at a documented representative point, such as the municipal office, with a count and selectable list. Its label explains that exact locations and distance from the selected center are unknown. The representative point may lie outside the circle; do not exclude a group solely for that reason. Keep provenance for the representative point and do not display it as a house location.
+- Offers without source-provided coordinates or a known municipality remain in an Unknown location list without a pin. Do not geocode or invent a house position. A source-provided point known to represent only the municipality belongs in the municipality group rather than an individual house pin.
+- Hide explicitly unavailable offers by default and provide Show unavailable in the map and list, including municipality counts. Preserve Japanese source text and successful-check timestamps; a missing result or failed request does not prove withdrawal.
+- Handle coincident pins so every listing remains reachable through the list. Clustering is optional, not a prerequisite.
+- Render source text as text and validate navigable source URLs. Show accessible status messages, meaningful focus behavior, and a usable list even if tiles fail.
+- Provide loading, no results, provider failure, and partial-location states. Keep sample mode prominently labeled. Later jobs plug into the query boundary without replacing the map's selection contract.
+
+## Testing Decisions
+
+- Use the previously confirmed browser-level seam with deterministic synthetic listings; test user-visible selection, radius validation, marker/list correspondence, details, and source navigation. The full import journey is extended in the next spec.
+- Assert geographic filtering at the listing-query boundary using known inside, outside, boundary, unverified, approximate, municipality-only, unknown-location, and coincident-location examples. Include an intersecting municipality whose summary point is outside the circle. Verify summary counts/list navigation, unverified labels, distance uncertainty, and Show unavailable behavior. Prefer observable result membership over map-library internals.
+- Verify keyboard area selection, invalid numeric input, empty/error states, and a mobile viewport. Test tiles with controlled network responses so checks do not depend on a live provider.
+- There is no existing map or testing precedent in this repository. Introduce only the tooling needed for these behavior checks; automated tests make no live bank requests.
+
+## Out of Scope
+
+- Import workers, job persistence, live bank adapters and collection scheduling.
+- Geocoding, automatic user location, route planning, translation, photo copying, and advanced filters beyond Show unavailable.
+- Public deployment and a distributed real listing dataset.
+
+## Further Notes
+
+- This is the first deliverable under the confirmed parent spec. It is complete when the fixture-backed exploration flow works independently of source permissions or backend setup.
