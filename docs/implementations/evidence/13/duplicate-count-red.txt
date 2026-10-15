@@ -1,0 +1,50 @@
+
+> open-akiya@0.1.0 test
+> vitest run --run src/main/runtime.test.ts
+
+
+ RUN  v5.0.4 /home/goncalvesjoao/Projects/open-akiya-ticket13
+
+ ❯ src/main/runtime.test.ts (7 tests | 1 failed) 962ms
+   × repeated discovery identities consume transport budget without duplicating offer counts 65ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/main/runtime.test.ts > repeated discovery identities consume transport budget without duplicating offer counts
+AssertionError: expected { …(16) } to match object { …(2) }
+(30 matching properties omitted from actual)
+
+- Expected
++ Received
+
+  {
+    "budget": {
+-     "detailUsed": 1,
++     "detailUsed": 2,
+    },
+    "counts": {
+      "added": 1,
+-     "checked": 1,
++     "checked": 2,
+      "discovered": 1,
+-     "unchanged": 0,
++     "unchanged": 1,
+    },
+  }
+
+ ❯ src/main/runtime.test.ts:159:55
+    157|   const runtime = open('duplicates.sqlite', 1, [adapter])
+    158|   const request = runtime.createRequest(input)
+    159|   expect(await completed(runtime, request.jobIds[0])).toMatchObject({ …
+       |                                                       ^
+    160| })
+    161|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 6 passed (7)
+   Start at  23:22:11
+   Duration  1.27s (tests 84%, setup 9%, transform 5%, import 1%)
+

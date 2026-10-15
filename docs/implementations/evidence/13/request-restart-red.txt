@@ -1,0 +1,30 @@
+
+> open-akiya@0.1.0 test
+> vitest run --run src/main/request.test.ts
+
+
+ RUN  v5.0.4 /home/goncalvesjoao/Projects/open-akiya-ticket13
+
+ ❯ src/main/request.test.ts (2 tests | 1 failed) 12ms
+   × idempotency persists separate request and job across worker restart 6ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/main/request.test.ts > idempotency persists separate request and job across worker restart
+TypeError: runtime.createRequest is not a function
+ ❯ src/main/request.test.ts:23:27
+     21|   try {
+     22|     const input = { area: initialArea, intent: 'import', idempotencyKe…
+     23|     const first = runtime.createRequest(input)
+       |                           ^
+     24|     expect(first.id).not.toBe(first.jobIds[0])
+     25|     expect(runtime.createRequest(input)).toEqual(first)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 1 passed (2)
+   Start at  23:17:20
+   Duration  288ms (setup 61%, transform 23%, tests 7%, import 6%, worker 2%)
+

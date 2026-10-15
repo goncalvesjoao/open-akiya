@@ -24,10 +24,15 @@ export default function ImportControls({
     let timer: ReturnType<typeof setTimeout>
     async function refresh() {
       try {
-        const next = await window.openAkiya.listImports()
+        const next = (await window.openAkiya.listImports({ state: 'active' }))
+          .jobs
         if (!active) return
         const revision = JSON.stringify(
-          next.map((job) => [job.id, job.state, job.processed]),
+          next.map((job) => [
+            job.id,
+            job.state,
+            job.counts.added + job.counts.updated + job.counts.unchanged,
+          ]),
         )
         if (previous.current !== revision) {
           previous.current = revision
@@ -61,11 +66,14 @@ export default function ImportControls({
             pendingAction.current = { scope, key: crypto.randomUUID() }
           const idempotencyKey = pendingAction.current.key
           try {
-            await window.openAkiya.createImport({
+            await window.openAkiya.createImportRequest({
+              intent: 'import',
               area,
               idempotencyKey,
             })
-            setJobs(await window.openAkiya.listImports())
+            setJobs(
+              (await window.openAkiya.listImports({ state: 'active' })).jobs,
+            )
             pendingAction.current = null
           } catch {
             setError(
@@ -90,15 +98,19 @@ export default function ImportControls({
               {job.state === 'succeeded' ? 'Search finished' : job.state}
             </strong>{' '}
             · {job.area.center.latitude}, {job.area.center.longitude} ·{' '}
-            {job.area.radiusKm} km · {job.processed} saved ({job.added} added,{' '}
-            {job.updated} updated)
-            {job.error && <span> · {job.error}</span>}
+            {job.area.radiusKm} km ·{' '}
+            {job.counts.added + job.counts.updated + job.counts.unchanged} saved
+            ({job.counts.added} added, {job.counts.updated} updated)
+            {job.error && <span> · {job.error.message}</span>}
             {(job.state === 'running' || job.state === 'queued') && (
               <button
                 onClick={async () => {
                   try {
                     await window.openAkiya.cancelImport(job.id)
-                    setJobs(await window.openAkiya.listImports())
+                    setJobs(
+                      (await window.openAkiya.listImports({ state: 'active' }))
+                        .jobs,
+                    )
                     settled.current()
                   } catch {
                     setError(

@@ -1,18 +1,28 @@
 // @vitest-environment node
 import { expect, test, beforeEach, afterEach } from 'vitest'
 import { ImportRuntime } from './runtime'
+import { syntheticAdapter } from './adapter'
+import { fixtures } from './fixtures'
 import { initialArea } from '../shared/geography'
 import type { AreaQuery } from '../shared/listings'
 let runtime: ImportRuntime
 beforeEach(async () => {
-  runtime = new ImportRuntime(':memory:', 0)
+  runtime = new ImportRuntime(':memory:', 0, {
+    adapters: [syntheticAdapter(0, fixtures)],
+  })
   for (const area of [
     initialArea,
     { center: { latitude: 0, longitude: 179.99 }, radiusKm: 5 },
     { center: { latitude: 0, longitude: 0 }, radiusKm: 5 },
   ]) {
-    const job = runtime.create({ area, idempotencyKey: JSON.stringify(area) })
-    await expect.poll(() => runtime.inspect(job.id).state).toBe('succeeded')
+    const request = runtime.createRequest({
+      area,
+      intent: 'import',
+      idempotencyKey: JSON.stringify(area),
+    })
+    await expect
+      .poll(() => runtime.inspect(request.jobIds[0]).state)
+      .toBe('succeeded')
   }
 })
 afterEach(async () => {
@@ -28,11 +38,11 @@ test('returns verified inside and coincident offers but excludes outside and una
     showUnavailable: false,
   })
   expect(result.mode).toBe('synthetic')
-  expect(result.listings.map((listing) => listing.id)).toEqual([
-    'sample-sale-1',
-    'sample-rent-1',
-    'sample-unknown-1',
-  ])
+  expect(
+    result.listings.map(
+      (listing) => `sample-${listing.sourceRefs[0].externalId}`,
+    ),
+  ).toEqual(['sample-sale-1', 'sample-rent-1', 'sample-unknown-1'])
 })
 
 test('includes a boundary offer and wraps longitude across the antimeridian', async () => {
@@ -43,16 +53,20 @@ test('includes a boundary offer and wraps longitude across the antimeridian', as
     },
     showUnavailable: false,
   })
-  expect(boundary.listings.map((listing) => listing.id)).toEqual([
-    'sample-boundary-1',
-  ])
+  expect(
+    boundary.listings.map(
+      (listing) => `sample-${listing.sourceRefs[0].externalId}`,
+    ),
+  ).toEqual(['sample-boundary-1'])
   const wrapped = await queryListings({
     area: { center: { latitude: 0, longitude: 179.99 }, radiusKm: 5 },
     showUnavailable: false,
   })
-  expect(wrapped.listings.map((listing) => listing.id)).toEqual([
-    'sample-antimeridian-1',
-  ])
+  expect(
+    wrapped.listings.map(
+      (listing) => `sample-${listing.sourceRefs[0].externalId}`,
+    ),
+  ).toEqual(['sample-antimeridian-1'])
 })
 
 test('only explicit unavailability is hidden and Show unavailable preserves offer identities', async () => {
@@ -60,7 +74,11 @@ test('only explicit unavailability is hidden and Show unavailable preserves offe
     area: { center: { latitude: 35, longitude: 135 }, radiusKm: 5 },
     showUnavailable: true,
   })
-  expect(result.listings.map((listing) => listing.id)).toEqual([
+  expect(
+    result.listings.map(
+      (listing) => `sample-${listing.sourceRefs[0].externalId}`,
+    ),
+  ).toEqual([
     'sample-sale-1',
     'sample-rent-1',
     'sample-unknown-1',

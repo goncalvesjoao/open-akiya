@@ -1,0 +1,25 @@
+
+> open-akiya@0.1.0 test
+> vitest run --run src/main/runtime.test.ts
+
+
+ RUN  v5.0.4 /home/goncalvesjoao/Projects/open-akiya-ticket13
+
+ ❯ src/main/runtime.test.ts (4 tests | 1 failed) 587ms
+   × rejects invalid area shapes and disabled sources before adapter calls 7ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/main/runtime.test.ts > rejects invalid area shapes and disabled sources before adapter calls
+AssertionError: expected [Function] to throw an error
+ ❯ src/main/runtime.test.ts:94:61
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 3 passed (4)
+   Start at  23:20:25
+   Duration  881ms (tests 77%, setup 13%, transform 7%, import 2%, worker 1%)
+
