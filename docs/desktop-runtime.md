@@ -71,4 +71,24 @@ Private SQLite source traversal records preserve candidates, cursors, completed
 identities, source/version/scope evidence and source outcomes. Retry deadlines and
 host pacing survive restart, alongside the existing durable current-job progress.
 These records are foundations for #6; this slice adds no continuation, freshness
-reuse, date stopping, checkpoint advancement or refresh allocation policy.
+reuse, date stopping or checkpoint advancement.
+
+Known offers relevant to the selected area enter a separate durable refresh queue,
+ordered globally by each source offer's oldest successful check, with unknown
+check times first. Worker configuration `refreshReservation` accepts a fraction
+from 0 to 1 and defaults to 0.25. When both classes are pending and the detail
+budget is at least two, refresh receives at least one attempt and new offers
+retain at least one attempt. The refresh phase runs before discovery so an
+abundant or failing discovery scan cannot starve older offers. Discovery/new
+work runs next; unused new-offer capacity returns to remaining refreshes. The
+existing total detail cap includes every retry, redirect hop and conditional
+attempt in its originating class. Neither reservation nor release enlarges it.
+
+The queue, completed identities, class attempt counts, configured reservation and
+next carried class survive worker restart. A one-attempt job chooses the carried
+class and records the opposite class after each attempted request, including
+failed attempts. Explicit continuation consumption and manual-refresh request
+creation remain #23/#25 integration work; when those APIs carry this progress,
+manual known-offer rechecks use the refresh queue. Freshness skipping is not
+implemented here, so current ordinary imports recheck all relevant saved offers.
+Deferred refreshes remain private saved work, and budget exhaustion is partial.

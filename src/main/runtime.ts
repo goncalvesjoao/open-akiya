@@ -50,6 +50,18 @@ type Progress = {
   discovered: string[]
   completed: string[]
   sourceSaved?: number
+  refresh?: {
+    sourceIndex: number
+    candidate: Candidate
+    checkedAt: string | null
+  }[]
+  deferredRefresh?: NonNullable<Progress['refresh']>
+  refreshSaved?: Record<number, number>
+  refreshIndex?: number
+  detailClassUsed?: { new: number; refresh: number }
+  nextDetailClass?: 'new' | 'refresh'
+  refreshReservation?: number
+  refreshAttemptLimit?: number
   visitedCursors?: string[]
 }
 function usefulProgress(progress: Progress, errorCode?: string): boolean {
@@ -68,6 +80,7 @@ type RuntimeOptions = TransportOptions & {
   leaseMs?: number
   discoveryLimit?: number
   detailLimit?: number
+  refreshReservation?: number
 }
 
 // Worker API seam: all SQLite access and execution ownership remain outside renderer.
@@ -78,6 +91,7 @@ export class ImportRuntime {
   private readonly now: () => number
   private readonly leaseMs: number
   private readonly limits: { discoveryLimit: number; detailLimit: number }
+  private readonly refreshReservation: number
   private readonly transportOptions: TransportOptions
   private readonly transportQueue = { tail: Promise.resolve() }
   private stopping = false
@@ -97,6 +111,13 @@ export class ImportRuntime {
       )
     )
       invalid('Invalid import budget configuration')
+    this.refreshReservation = options.refreshReservation ?? 0.25
+    if (
+      !Number.isFinite(this.refreshReservation) ||
+      this.refreshReservation < 0 ||
+      this.refreshReservation > 1
+    )
+      invalid('Invalid refresh reservation')
     this.transportOptions = options
     this.adapters = options.adapters ?? [syntheticAdapter(delayMs)]
     this.now = options.now ?? Date.now
@@ -281,6 +302,7 @@ export class ImportRuntime {
         limitation: null,
         discovered: [],
         completed: [],
+        refreshReservation: this.refreshReservation,
       }
       const request: ImportRequest = {
         id: randomUUID(),
@@ -453,7 +475,12 @@ export class ImportRuntime {
       .prepare('UPDATE import_jobs_v2 SET progress=? WHERE id=?')
       .run(JSON.stringify(progress), job.id)
   }
-  private context(job: ImportJob, adapter: SourceAdapter): AdapterContext {
+  private context(
+    job: ImportJob,
+    adapter: SourceAdapter,
+    progress: Progress,
+    detailClass: 'new' | 'refresh' = 'new',
+  ): AdapterContext {
     return {
       signal: this.controller!.signal,
       now: () => this.time(),
@@ -502,8 +529,24 @@ export class ImportRuntime {
               'BUDGET_EXHAUSTED',
               'Import request budget exhausted',
             )
+          if (
+            kind === 'detail' &&
+            detailClass === 'refresh' &&
+            progress.refreshAttemptLimit !== undefined &&
+            job.budget.detailUsed >= progress.refreshAttemptLimit
+          )
+            throw new LocalApiError(
+              409,
+              'BUDGET_EXHAUSTED',
+              'Reserved refresh request capacity exhausted',
+            )
           job.budget[used]++
-          this.save(job)
+          if (kind === 'detail') {
+            progress.detailClassUsed![detailClass]++
+            progress.nextDetailClass =
+              detailClass === 'refresh' ? 'new' : 'refresh'
+          }
+          this.saveProgress(job, progress)
         },
       }),
     }
@@ -807,6 +850,173 @@ export class ImportRuntime {
     else if (unchanged) job.counts.unchanged++
     else job.counts.updated++
   }
+  private prepareRefresh(job: ImportJob, progress: Progress) {
+    progress.detailClassUsed ??= { new: 0, refresh: 0 }
+    progress.refreshReservation ??= this.refreshReservation
+    progress.refreshIndex ??= 0
+    if (progress.refresh) return
+    const relevant = new Set(
+      this.results({ area: job.area, showUnavailable: true }).listings.map(
+        (listing) => listing.id,
+      ),
+    )
+    progress.refresh = this.adapters
+      .flatMap((adapter, sourceIndex) =>
+        adapter.capabilities.geography === 'unsupported'
+          ? []
+          : this.db
+              .prepare(
+                `SELECT k.external_id,k.transaction_type,l.data,o.data AS observation
+      FROM offer_keys k JOIN listings l ON l.id=k.listing_id
+      LEFT JOIN offer_observations o ON o.source_id=k.source_id AND o.external_id=k.external_id AND o.transaction_type=k.transaction_type
+      WHERE k.source_id=?`,
+              )
+              .all(adapter.capabilities.sourceId)
+              .filter((row) => relevant.has(JSON.parse(String(row.data)).id))
+              .map((row) => {
+                const listing: ListingProjection = JSON.parse(String(row.data))
+                const ref = listing.sourceRefs.find(
+                  (ref) =>
+                    ref.sourceId === adapter.capabilities.sourceId &&
+                    ref.externalId === row.external_id,
+                )!
+                return {
+                  sourceIndex,
+                  checkedAt: row.observation
+                    ? (JSON.parse(String(row.observation)) as SourceObservation)
+                        .sourceCheckedAt
+                    : null,
+                  candidate: {
+                    externalId: String(row.external_id),
+                    transactionType: listing.transactionType,
+                    url: ref.url,
+                    location: listing.location,
+                    municipalityId: listing.municipalityId,
+                    publishedAt: null,
+                    modifiedAt: null,
+                    relevance: 'plausible' as const,
+                  },
+                }
+              }),
+      )
+      .sort(
+        (a, b) =>
+          (a.checkedAt ?? '').localeCompare(b.checkedAt ?? '') ||
+          a.sourceIndex - b.sourceIndex ||
+          a.candidate.externalId.localeCompare(b.candidate.externalId),
+      )
+  }
+  private async detail(
+    job: ImportJob,
+    progress: Progress,
+    sourceIndex: number,
+    candidate: Candidate,
+    detailClass: 'new' | 'refresh',
+    advance: () => void,
+  ) {
+    const adapter = this.adapters[sourceIndex]
+    const source = job.sources[sourceIndex]
+    const identity = JSON.stringify([
+      adapter.capabilities.sourceId,
+      candidate.externalId,
+      candidate.transactionType,
+    ])
+    if (progress.completed.includes(identity)) {
+      advance()
+      this.saveProgress(job, progress)
+      return
+    }
+    job.stage = 'fetching'
+    this.save(job)
+    const evidence = await this.parse(() =>
+      adapter.fetchDetail(
+        candidate,
+        this.context(job, adapter, progress, detailClass),
+      ),
+    )
+    this.ensure(job)
+    const normalized = await this.parse(() => adapter.normalize(evidence))
+    this.ensure(job)
+    job.stage = 'saving'
+    this.save(job)
+    this.transaction(() => {
+      this.ensure(job)
+      job.counts.checked++
+      if (normalized.kind === 'accepted') {
+        try {
+          this.commit(job, normalized.observation, adapter, candidate)
+          if (sourceIndex === progress.sourceIndex)
+            progress.sourceSaved = (progress.sourceSaved ?? 0) + 1
+          if (detailClass === 'refresh') {
+            progress.refreshSaved ??= {}
+            progress.refreshSaved[sourceIndex] =
+              (progress.refreshSaved[sourceIndex] ?? 0) + 1
+          }
+        } catch (error) {
+          if (
+            !(error instanceof LocalApiError) ||
+            error.code !== 'INVALID_REQUEST'
+          )
+            throw error
+          job.counts.rejected++
+          source.error = safeError(error)
+        }
+      } else {
+        job.counts.rejected++
+        source.error = {
+          code: 'PARSE_ERROR',
+          message: 'Source listing could not be parsed',
+          retryable: false,
+        }
+      }
+      progress.completed.push(identity)
+      advance()
+      progress.nextDetailClass = detailClass === 'refresh' ? 'new' : 'refresh'
+      this.saveProgress(job, progress)
+    })
+  }
+  private async refresh(job: ImportJob, progress: Progress, limit: number) {
+    progress.refreshAttemptLimit = limit
+    while (
+      progress.refreshIndex! < progress.refresh!.length &&
+      job.budget.detailUsed < limit
+    ) {
+      const task = progress.refresh![progress.refreshIndex!]
+      try {
+        await this.detail(
+          job,
+          progress,
+          task.sourceIndex,
+          task.candidate,
+          'refresh',
+          () => {
+            progress.refreshIndex!++
+          },
+        )
+      } catch (error) {
+        this.ensure(job)
+        Object.assign(job, this.inspect(job.id))
+        Object.assign(
+          progress,
+          JSON.parse(
+            String(
+              this.db
+                .prepare('SELECT progress FROM import_jobs_v2 WHERE id=?')
+                .get(job.id)!.progress,
+            ),
+          ),
+        )
+        if (error instanceof LocalApiError && error.code === 'BUDGET_EXHAUSTED')
+          break
+        job.sources[task.sourceIndex].error = safeError(error)
+        progress.deferredRefresh ??= []
+        progress.deferredRefresh.push(task)
+        progress.refreshIndex!++
+        this.saveProgress(job, progress)
+      }
+    }
+    this.saveProgress(job, progress)
+  }
   private upgradeProgress(job: ImportJob, progress: Progress) {
     // Old progress keys omitted transaction type. Resolve committed offers from
     // their migrated keys, so a repeated candidate after restart stays checked
@@ -929,6 +1139,7 @@ export class ImportRuntime {
         )
       const progress: Progress = JSON.parse(String(row.progress))
       this.upgradeProgress(job, progress)
+      this.prepareRefresh(job, progress)
       job.counts.discovered = progress.discovered.length
       // Retain the upgrade before outbound work: a later failed transaction
       // restores this durable progress rather than discarding recovered evidence.
@@ -936,12 +1147,30 @@ export class ImportRuntime {
         this.ensure(job)
         this.saveProgress(job, progress)
       })
+      const reservation =
+        job.budget.detailLimit < 2
+          ? progress.nextDetailClass === 'new'
+            ? 0
+            : 1
+          : Math.max(
+              1,
+              Math.min(
+                job.budget.detailLimit - 1,
+                Math.floor(
+                  job.budget.detailLimit * progress.refreshReservation!,
+                ),
+              ),
+            )
+      await this.refresh(job, progress, reservation)
       for (; progress.sourceIndex < this.adapters.length;) {
         const adapter = this.adapters[progress.sourceIndex]
         const source = job.sources[progress.sourceIndex]
-        progress.sourceSaved ??= 0
+        progress.sourceSaved = Math.max(
+          progress.sourceSaved ?? 0,
+          progress.refreshSaved?.[progress.sourceIndex] ?? 0,
+        )
         source.state = 'running'
-        const context = this.context(job, adapter)
+        const context = this.context(job, adapter, progress)
         try {
           if (adapter.capabilities.geography === 'unsupported')
             throw new LocalApiError(
@@ -1032,46 +1261,27 @@ export class ImportRuntime {
                 this.saveProgress(job, progress)
                 continue
               }
-              job.stage = 'fetching'
-              this.save(job)
-              const evidence = await this.parse(() =>
-                adapter.fetchDetail(candidate, context),
+              const refreshTask = progress.refresh!.some(
+                (task) =>
+                  task.sourceIndex === progress.sourceIndex &&
+                  task.candidate.externalId === candidate.externalId &&
+                  task.candidate.transactionType === candidate.transactionType,
               )
-              this.ensure(job)
-              const normalized = await this.parse(() =>
-                adapter.normalize(evidence),
-              )
-              this.ensure(job)
-              job.stage = 'saving'
-              this.save(job)
-              this.transaction(() => {
-                this.ensure(job)
-                job.counts.checked++
-                if (normalized.kind === 'accepted') {
-                  try {
-                    this.commit(job, normalized.observation, adapter, candidate)
-                    progress.sourceSaved!++
-                  } catch (error) {
-                    if (
-                      !(error instanceof LocalApiError) ||
-                      error.code !== 'INVALID_REQUEST'
-                    )
-                      throw error
-                    job.counts.rejected++
-                    source.error = safeError(error)
-                  }
-                } else {
-                  job.counts.rejected++
-                  source.error = {
-                    code: 'PARSE_ERROR',
-                    message: 'Source listing could not be parsed',
-                    retryable: false,
-                  }
-                }
-                progress.completed.push(identity)
+              if (refreshTask) {
                 progress.candidateIndex++
                 this.saveProgress(job, progress)
-              })
+                continue
+              }
+              await this.detail(
+                job,
+                progress,
+                progress.sourceIndex,
+                candidate,
+                'new',
+                () => {
+                  progress.candidateIndex++
+                },
+              )
             }
             progress.candidates = []
             progress.candidateIndex = 0
@@ -1140,6 +1350,61 @@ export class ImportRuntime {
         progress.exhausted = false
         progress.limitation = null
         this.saveProgress(job, progress)
+      }
+      // Discovery/new work releases its unused capacity to the oldest deferred refreshes.
+      await this.refresh(job, progress, job.budget.detailLimit)
+      progress.refresh!.push(...(progress.deferredRefresh ?? []))
+      progress.deferredRefresh = []
+      this.saveProgress(job, progress)
+      for (const task of progress.refresh!.slice(progress.refreshIndex)) {
+        const source = job.sources[task.sourceIndex]
+        if (
+          source.state !== 'failed' ||
+          !source.error ||
+          source.error.code === 'BUDGET_EXHAUSTED' ||
+          (progress.refreshSaved?.[task.sourceIndex] ?? 0) > 0
+        )
+          source.state = 'partial'
+        source.coverage = 'partial'
+        source.error ??= {
+          code: 'BUDGET_EXHAUSTED',
+          message: 'Deferred refresh work remains',
+          retryable: false,
+        }
+        if (!job.reasons.includes(source.error.code))
+          job.reasons.push(source.error.code)
+      }
+      for (const [sourceIndex, source] of job.sources.entries()) {
+        if (source.error && source.state === 'succeeded') {
+          source.state =
+            (progress.refreshSaved?.[sourceIndex] ?? 0) > 0
+              ? 'partial'
+              : 'failed'
+          source.coverage = 'partial'
+        }
+      }
+      for (const row of this.db
+        .prepare('SELECT source_id,data FROM source_traversals WHERE job_id=?')
+        .all(job.id)) {
+        const saved = JSON.parse(String(row.data))
+        for (const key of [
+          'refresh',
+          'refreshIndex',
+          'refreshSaved',
+          'deferredRefresh',
+          'detailClassUsed',
+          'nextDetailClass',
+          'refreshReservation',
+        ] as const)
+          saved[key] = progress[key]
+        saved.outcome = job.sources.find(
+          (source) => source.sourceId === row.source_id,
+        )
+        this.db
+          .prepare(
+            'UPDATE source_traversals SET data=? WHERE job_id=? AND source_id=?',
+          )
+          .run(JSON.stringify(saved), job.id, row.source_id)
       }
       this.ensure(job)
       job.state = job.sources.every((source) => source.state === 'succeeded')
