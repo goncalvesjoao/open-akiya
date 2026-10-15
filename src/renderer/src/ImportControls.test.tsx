@@ -55,6 +55,7 @@ const job: Job = {
 }
 function setup(overrides: Partial<DesktopAPI> = {}) {
   const api: DesktopAPI = {
+    searchLocations: vi.fn(),
     createImportRequest: vi.fn(async (): Promise<ImportRequest> => ({
       id: 'request',
       area: initialArea,

@@ -1,3 +1,4 @@
+import LocationSearch from './LocationSearch'
 import ImportControls from './ImportControls'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
@@ -281,6 +282,7 @@ function MapCanvas({
 
 export default function AreaMap() {
   const [area, setArea] = useState(initialArea)
+  const [selectionRevision, setSelectionRevision] = useState(0)
   const [draft, setDraft] = useState(['35', '135', '5'])
   const [showUnavailable, setShowUnavailable] = useState(false)
   const [results, setResults] = useState<AreaResults | null>(null)
@@ -291,6 +293,7 @@ export default function AreaMap() {
   const [loading, setLoading] = useState(true)
   const [revision, setRevision] = useState(0)
   function selectArea(next: SelectedArea) {
+    setSelectionRevision((value) => value + 1)
     setLoading(true)
     setQueryError('')
     setArea(next)
@@ -346,6 +349,10 @@ export default function AreaMap() {
         the map to choose a center; drag to pan and use + / − to zoom. Imports
         only start when you choose Import sample listings.
       </p>
+      <LocationSearch
+        key={selectionRevision}
+        onSelect={(match) => selectArea({ ...area, center: match.center })}
+      />
       <form
         noValidate
         onSubmit={(event) => {

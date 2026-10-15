@@ -15,6 +15,7 @@ it('exposes only approved domain operations through named IPC channels', async (
     'inspectImport',
     'inspectImportRequest',
     'listImports',
+    'searchLocations',
   ])
   const input = {
     area: { center: { latitude: 35, longitude: 135 }, radiusKm: 5 },
