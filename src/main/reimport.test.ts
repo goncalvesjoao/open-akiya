@@ -324,3 +324,47 @@ test('retains unknown money separately from explicit zero sale and monthly rent'
     ]),
   )
 })
+
+test.each([
+  'titleJa',
+  'priceNoteJa',
+  'propertyType',
+  'prefecture',
+  'municipalityId',
+  'municipalityNameJa',
+] as const)(
+  'blank %s patches cannot erase saved source text',
+  async (field) => {
+    const offer = {
+      ...fixtures[0],
+      titleJa: '元の見出し',
+      priceNoteJa: '元の価格注記',
+      propertyType: '元の物件種別',
+      prefecture: '元の県名',
+      municipalityId: 'fixture:original',
+      municipalityNameJa: '元の自治体名',
+    }
+    let patch: string | undefined
+    const base = syntheticAdapter(1, [offer])
+    const adapter: SourceAdapter = {
+      ...base,
+      normalize(evidence) {
+        const result = base.normalize(evidence)
+        if (result.kind === 'accepted' && patch !== undefined)
+          result.observation.fields[field] = patch
+        return result
+      },
+    }
+    const runtime = open(`blank-${field}.sqlite`, [adapter])
+    await imported(runtime)
+    const saved = runtime.results(query).listings[0]
+    for (const blank of ['', ' \t\n　']) {
+      patch = blank
+      expect(await imported(runtime)).toMatchObject({
+        state: 'partial',
+        counts: { checked: 1, rejected: 1, updated: 0 },
+      })
+      expect(runtime.results(query).listings[0]).toEqual(saved)
+    }
+  },
+)

@@ -520,6 +520,9 @@ export class ImportRuntime {
       typeof observation.provenance[key] === 'string' &&
       observation.provenance[key].trim().length > 0
     for (const key of fieldNames) {
+      const field = fields[key]
+      if (typeof field === 'string' && !field.trim())
+        invalid('Invalid blank source text')
       // Null is a removal only when the adapter supplies field-specific evidence.
       if (previous && fields[key] === null && !removalEvidence(key))
         delete fields[key]
