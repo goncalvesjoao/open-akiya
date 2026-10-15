@@ -1,5 +1,11 @@
 # Import cache reuse, refresh scheduling, and bounded continuation
 
+## Desktop runtime
+
+Use Electron, React/TypeScript, a utility-process worker and worker-owned SQLite. Job operations cross a validated, context-isolated preload bridge; there is no local HTTP server. The renderer cannot access Node.js, SQL, source observations or arbitrary IPC. Closing the window keeps the application and imports running; reopening from the launcher restores the window. Explicit Quit stops scheduling and preserves committed work for recovery on restart. Cancelled work never resumes automatically. Sleep, shutdown and process crashes interrupt execution; no operating-system service or scheduling while fully exited is promised.
+
+The full acceptance requirements below remain targets. The desktop foundation implements basic synthetic create/list/inspect/cancel/results operations, exact-area active-job reuse and restart recovery. It does **not** complete freshness/containment policies, request-intent ownership, manual-refresh follow-ups, bounded continuation, rich job counters, all location variants, address lookup or live-source activation. See [desktop runtime](../desktop-runtime.md) for the implementation boundary. Keep these gaps explicit rather than weakening acceptance.
+
 Part of #3, under #1. Can start once #5 job/adapter contracts settle; integrated completion is blocked by #5. Can overlap #7 using agreed API fixtures. See the [implementation plan](../implementation-plan.md).
 
 ## Problem Statement
@@ -35,12 +41,12 @@ Extend the persistent job API with freshness-aware work reuse, manual refresh in
 
 ## Testing Decisions
 
-- Retain the user-confirmed job API seam with test Postgres and deterministic fixture adapters, plus the existing map browser journey where UI behavior is involved. Assert observable behavior, not implementation internals.
+- Retain the user-confirmed worker API seam with temporary SQLite databases and deterministic fixture adapters, plus the existing map Electron renderer journey where UI behavior is involved. Assert observable behavior, not implementation internals.
 - Verify area containment versus mere overlap, source/filter/version invalidation, cache re-evaluation when queued work begins, and reuse of individual listing details within 24 hours.
 - Verify reserved refresh capacity, oldest-first deferred work, release of unused capacity, retry accounting, and total discovery/detail caps with mixed new and stale offers.
 - Verify initial scans and unrelated scopes cannot reuse checkpoints; consume equal-date ties; disable early stopping for unreliable dates; preserve older-offer refreshes; never advance checkpoints after partial, cancelled, or failed traversals.
 - Verify Continue search retains progress across bounded jobs, invalid cursors trigger safe bounded restarts without duplicate records or false coverage, and manual refresh attached to ordinary work queues missing rechecks without premature success.
-- The repository currently has no job test precedent. Introduce only necessary tooling and use controlled clocks/network responses; automated checks make no live bank requests.
+- Extend the SQLite worker tests and Electron end-to-end journey with only necessary tooling and use controlled clocks/network responses; automated checks make no live bank requests.
 
 ## Out of Scope
 
@@ -54,7 +60,7 @@ Map UI integration and live source retrieval are separate milestones. Reuse the 
 
 ## Shared policy extensions and response examples
 
-Contract alignment, 2026-10-15. Extend #5's `ImportRequest`, `ImportJob`, `Coverage` and endpoints; do not introduce another API or DTO. Area input is owned by #2. This section specifies policy, not implemented behavior. All example times and source IDs are synthetic. Snapshot replacement objects below expand against #5's complete queued job example; these are fixture recipes for full GET responses, never PATCH responses.
+Contract alignment, 2026-10-15. Extend #5's `ImportRequest`, `ImportJob`, `Coverage` and operations; do not introduce another API or DTO. Area input is owned by #2. This section specifies policy, not implemented behavior. All example times and source IDs are synthetic. Snapshot replacement objects below expand against #5's complete queued job example; these are fixture recipes for full inspection responses, never mutation responses.
 
 ### Scope, freshness and bounded work
 
@@ -68,9 +74,9 @@ A completed discovery checkpoint is private `{sourceId, queryKey, adapterVersion
 
 ### Create, cache and attachment
 
-POST `/api/import-requests` accepts the #5 base body or `{area, intent:'manual_refresh'}`. Continuation accepts `{intent:'continue', fromJobId}` and derives area, source scope, pending refresh intent and cumulative progress from that job. Do not accept a replacement area with continuation. Each action supplies an idempotency key. A continuation from an active job is 409 `JOB_NOT_TERMINAL`; no saved or restartable work is 409 `NOT_CONTINUABLE`. Concurrent/retried continuations from the same progress generation reuse the already-created continuation rather than double-schedule it. Changed source semantics require safe restart of affected discovery with an explanation; unresolved/disabled source scope is a configuration failure rather than silently complete coverage.
+`createImportRequest(input)` accepts the #5 base body or `{area, intent:'manual_refresh'}`. Continuation accepts `{intent:'continue', fromJobId}` and derives area, source scope, pending refresh intent and cumulative progress from that job. Do not accept a replacement area with continuation. Each action supplies an idempotency key. A continuation from an active job rejects with `JOB_NOT_TERMINAL`; no saved or restartable work rejects with `NOT_CONTINUABLE`. Concurrent/retried continuations from the same progress generation reuse the already-created continuation rather than double-schedule it. Changed source semantics require safe restart of affected discovery with an explanation; unresolved/disabled source scope is a configuration failure rather than silently complete coverage.
 
-A cached ordinary import returns 200, for example:
+A cached ordinary import resolves, for example:
 
 ```json
 {
@@ -87,11 +93,11 @@ A cached ordinary import returns 200, for example:
 }
 ```
 
-The linked succeeded job is the covering check; area-results exposes its actual check time. Manual refresh cannot use this disposition. An identical or fully covering running job instead returns 202 with `disposition:'attached'`, that job's ID and a queued/running request state. Partial overlap creates a queued job; reusable candidates/details are reconsidered when it starts. Recover by persisted request ID, then inspect its job IDs. Pending state is persisted server-side, not inferred from browser memory. No response claims manual completion just because the attached ordinary job finished.
+The linked succeeded job is the covering check; area-results exposes its actual check time. Manual refresh cannot use this disposition. An identical or fully covering running job instead resolves with `disposition:'attached'`, that job's ID and a queued/running request state. Partial overlap creates a queued job; reusable candidates/details are reconsidered when it starts. Recover by persisted request ID, then inspect its job IDs. Pending state is persisted in worker-owned SQLite, not inferred from renderer memory. No response claims manual completion just because the attached ordinary job finished.
 
 ### Partial results and explicit continuation
 
-GET `/api/import-jobs/job-1` after discovery budget exhaustion returns #5's base snapshot with:
+`inspectImport("job-1")` after discovery budget exhaustion returns #5's base snapshot with:
 
 ```json
 {
@@ -138,7 +144,7 @@ GET `/api/import-jobs/job-1` after discovery budget exhaustion returns #5's base
 }
 ```
 
-The associated request is partial with finishedAt `2026-10-15T00:00:30Z`. POST `/api/import-requests`, `Idempotency-Key: sample-continue-1`:
+The associated request is partial with finishedAt `2026-10-15T00:00:30Z`. `createImportRequest(input)`, `idempotencyKey: "sample-continue-1"`:
 
 ```json
 { "intent": "continue", "fromJobId": "job-1" }
@@ -161,11 +167,11 @@ The associated request is partial with finishedAt `2026-10-15T00:00:30Z`. POST `
 }
 ```
 
-GET `/api/import-jobs/job-2` uses the base queued snapshot with `id:'job-2'`, createdAt `2026-10-15T00:01:00Z`, zero job-local counts/budget use, partial coverage inherited from saved traversal and `continuation:{available:false,fromJobId:'job-1',restarted:false,restartReason:null}`. Budget limits reset per job; identities, deferred refreshes and traversal progress persist. The original job remains partial and immutable. `available` becomes true on a terminal job only when there is explicit resumable or restartable pending work; UI offers Continue search for cancelled/failed jobs too when this flag is true. No automatic resume of user-cancelled work.
+`inspectImport("job-2")` uses the base queued snapshot with `id:'job-2'`, createdAt `2026-10-15T00:01:00Z`, zero job-local counts/budget use, partial coverage inherited from saved traversal and `continuation:{available:false,fromJobId:'job-1',restarted:false,restartReason:null}`. Budget limits reset per job; identities, deferred refreshes and traversal progress persist. The original job remains partial and immutable. `available` becomes true on a terminal job only when there is explicit resumable or restartable pending work; UI offers Continue search for cancelled/failed jobs too when this flag is true. No automatic resume of user-cancelled work.
 
 ### Expired-cursor bounded restart
 
-If adapter discovery rejects saved progress, GET `/api/import-jobs/job-2` returns this running snapshot replacement (job-2 identity/time as above):
+If adapter discovery rejects saved progress, `inspectImport("job-2")` returns this running snapshot replacement (job-2 identity/time as above):
 
 ```json
 {
@@ -209,7 +215,7 @@ The failed cursor request consumed one discovery attempt; restarting does not re
 
 ### Manual refresh attached to ordinary work
 
-POST `/api/import-requests` with a new key at `00:00:05Z` while ordinary job-1 is running:
+`createImportRequest(input)` with a new key at `00:00:05Z` while ordinary job-1 is running:
 
 ```json
 {
@@ -237,7 +243,7 @@ POST `/api/import-requests` with a new key at `00:00:05Z` while ordinary job-1 i
 
 Track request time as its refresh cutoff. Successful detail checks performed since it satisfy that offer's recheck; skipped-as-fresh details do not. Repeated refresh clicks while the same area/scope refresh intent is pending attach to that intent and retain the original cutoff; keys prevent transport retries and intent deduplication prevents double-click job duplication. A refresh after terminal completion is a new action.
 
-If ordinary job-1 finishes at `00:00:30Z` after skipping two recent details, GET `/api/import-requests/request-refresh` returns:
+If ordinary job-1 finishes at `00:00:30Z` after skipping two recent details, `inspectImportRequest("request-refresh")` returns:
 
 ```json
 {
@@ -300,7 +306,7 @@ That coverage is valid only if job-1 completed required discovery and the follow
 
 ### Cancellation and failures with shared work
 
-POST `/api/import-requests/request-refresh/cancel` `{}` cancels that intent and its exclusively owned queued follow-ups; shared ordinary job-1 continues for other requests. The 200 request response keeps its IDs/area/intent and sets `state:'cancelled'`, `pendingFollowUp:false`, `finishedAt` to cancellation time, `error:null`. Request cancellation detaches from shared work; cancellation of the last attached active intent requests cooperative job cancellation. A completed cached reference does not own the historical job. A job-level cancel is the explicit queue/execution control and affects attached requests: they report cancellation unless their intent had already completed. Terminal requests do not reopen. No saved records are deleted.
+`cancelImportRequest("request-refresh")` cancels that intent and its exclusively owned queued follow-ups; shared ordinary job-1 continues for other requests. The request response keeps its IDs/area/intent and sets `state:'cancelled'`, `pendingFollowUp:false`, `finishedAt` to cancellation time, `error:null`. Request cancellation detaches from shared work; cancellation of the last attached active intent requests cooperative job cancellation. A completed cached reference does not own the historical job. A job-level cancel is the explicit queue/execution control and affects attached requests: they report cancellation unless their intent had already completed. Terminal requests do not reopen. No saved records are deleted.
 
 For a running cooperative cancellation, POST job cancel first returns running with cancelRequestedAt set; after an active detail commits, GET returns cancelled/finished with truthful saved counts. Example replacement on #5's base: `{"state":"cancelled","stage":"finished","startedAt":"2026-10-15T00:00:01Z","finishedAt":"2026-10-15T00:00:10Z","cancelRequestedAt":"2026-10-15T00:00:09Z","counts":{"discovered":1,"checked":1,"added":1,"updated":0,"unchanged":0,"rejected":0},"budget":{"discoveryUsed":1,"discoveryLimit":10,"detailUsed":1,"detailLimit":100},"sources":[{"sourceId":"fixture","state":"cancelled","coverage":"partial","error":null}],"coverage":{"status":"partial","lastSuccessfulCheckAt":null,"freshUntil":null,"scopeKey":"fixture-scope-v1","caveats":["Cancelled; saved results retained"]},"reasons":["USER_CANCELLED"],"continuation":{"available":true,"fromJobId":null,"restarted":false,"restartReason":null}}`.
 

@@ -148,11 +148,15 @@ vite.config.ts.timestamp-*
 # Turbo Repo
 .turbo
 
-# Supabase local state
-supabase/.temp/
-supabase/.branches/
-
 # Playwright artifacts
 test-results/
 playwright-report/
 playwright/.cache/
+
+# Desktop builds and local data
+dist-electron/
+release/
+.playwright-dist/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

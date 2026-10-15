@@ -1,5 +1,11 @@
 # First permitted live source for bounded area imports
 
+## Desktop runtime
+
+Use Electron, React/TypeScript, a utility-process worker and worker-owned SQLite. Job operations cross a validated, context-isolated preload bridge; there is no local HTTP server. The renderer cannot access Node.js, SQL, source observations or arbitrary IPC. Closing the window keeps the application and imports running; reopening from the launcher restores the window. Explicit Quit stops scheduling and preserves committed work for recovery on restart. Cancelled work never resumes automatically. Sleep, shutdown and process crashes interrupt execution; no operating-system service or scheduling while fully exited is promised.
+
+The full acceptance requirements below remain targets. The desktop foundation implements basic synthetic create/list/inspect/cancel/results operations, exact-area active-job reuse and restart recovery. It does **not** complete freshness/containment policies, request-intent ownership, manual-refresh follow-ups, bounded continuation, rich job counters, all location variants, address lookup or live-source activation. See [desktop runtime](../desktop-runtime.md) for the implementation boundary. Keep these gaps explicit rather than weakening acceptance.
+
 Part of #1. Source/access investigation can start immediately, with adapter development after contract alignment. The live pilot and integrated completion are blocked by #3. See the [implementation plan](../implementation-plan.md).
 
 ## Problem Statement
@@ -54,14 +60,14 @@ Implement and verify one permitted live source through the established adapter c
 
 ## Testing Decisions
 
-- Reuse the confirmed job API seam, substituting source-shaped synthetic HTTP responses behind the real adapter. Verify saved results, counts, failures, and request bounds rather than parser internals.
+- Reuse the confirmed worker API seam, substituting source-shaped synthetic HTTP responses behind the real adapter. Verify saved results, counts, failures, and request bounds rather than parser internals.
 - Exercise paginated duplicates, changed and unknown prices, explicit free, rentals, unit conversion, stale details, missing/approximate coordinates, malformed templates, source blocks, Retry-After, budget exhaustion, and cancellation.
 - Verify a partial municipal scan is not recorded as complete coverage, precise out-of-radius offers do not become in-radius pins, and unknown coordinates remain accessible as uncertain candidates.
 - Verify initial scans do not stop against unrelated database dates, equal-date ties are processed, unreliable ordering disables early stopping, and partial/cancelled/failed traversals never advance completed checkpoints. Verify saved continuation progress and older-offer changes after discovery stops.
 - Verify manual refresh bypasses recent detail freshness within request budgets; source locations produce appropriately labeled individual pins or municipality groups; and explicit withdrawal remains accessible through Show unavailable.
 - Add source-shaped fixtures for expired/invalid cursors and changing pagination, proving safe bounded restart and identity reuse without false coverage. Verify mixed discovery/refresh workloads respect reserved capacity, and manual refresh attached to ordinary work performs the additional required checks without duplicate fetching or premature success.
 - Verify repeated runs do not duplicate source offers, failed payloads preserve valid records, and scoped omission does not withdraw listings. Routine tests use no live provider requests.
-- The parent-approved browser journey already tests map completion. Reuse it with deterministic adapter responses; the small manual live pilot provides the evidence specific to this source.
+- The parent-approved Electron renderer journey already tests map completion. Reuse it with deterministic adapter responses; the small manual live pilot provides the evidence specific to this source.
 
 ## Out of Scope
 
@@ -79,6 +85,6 @@ Source investigation, 2026-10-15: [Tsubata Town official CSV findings](../resear
 
 ## Shared contract handoff and remaining source decisions
 
-Consume #2's area/query semantics, #5's listing projection and internal source-adapter contract, and #6's cursor/checkpoint/manual-refresh policies. Source-native evidence normalizes into those observations; do not create a parallel live-only job or map DTO. Use their concrete synthetic request/response recipes with source-shaped fixture evidence. The nightly-plan document is background; its schedules, absence-based reconciliation and geocoding suggestions do not override these on-demand specs.
+Consume #2's area/query semantics, #5's listing projection and internal source-adapter contract, and #6's cursor/checkpoint/manual-refresh policies. Source-native evidence normalizes into those observations; do not create a parallel live-only job or map DTO. Use their concrete synthetic request/response recipes with source-shaped fixture evidence.
 
 Source/access investigation remains open: select a permitted source/access method and establish stable offer IDs, actual geography, request limits, retained fields, and ordering/cursor evidence before enabling it. Municipality adapters also need documented boundary/intersection evidence and representative-point provenance; use synthetic geometry for parallel fixture work. Recommend an official permitted municipal feed if national-bank access stays unresolved, as already allowed. A source unable to establish geographic support reports unsupported coverage instead of discovering nationwide. These are live-source gates, not blockers for #2/#5 synthetic work. Any required expansion of product scope or rights beyond the confirmed local facts-only import returns to the user; routine library, transport, reference-format and storage choices stay with implementation under the established constraints. No new product decision is needed to start map/backend work.

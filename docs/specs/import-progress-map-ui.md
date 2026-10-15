@@ -1,6 +1,12 @@
 # Map import controls, queue, progress, and result refresh
 
-Part of #3, under #1. Can start against mocked responses once map/job contracts settle; integrated completion is blocked by #2 and #6. Completing all #3 children satisfies #3 only after the full fixture-backed browser journey passes. See the [implementation plan](../implementation-plan.md).
+## Desktop runtime
+
+Use Electron, React/TypeScript, a utility-process worker and worker-owned SQLite. Job operations cross a validated, context-isolated preload bridge; there is no local HTTP server. The renderer cannot access Node.js, SQL, source observations or arbitrary IPC. Closing the window keeps the application and imports running; reopening from the launcher restores the window. Explicit Quit stops scheduling and preserves committed work for recovery on restart. Cancelled work never resumes automatically. Sleep, shutdown and process crashes interrupt execution; no operating-system service or scheduling while fully exited is promised.
+
+The full acceptance requirements below remain targets. The desktop foundation implements basic synthetic create/list/inspect/cancel/results operations, exact-area active-job reuse and restart recovery. It does **not** complete freshness/containment policies, request-intent ownership, manual-refresh follow-ups, bounded continuation, rich job counters, all location variants, address lookup or live-source activation. See [desktop runtime](../desktop-runtime.md) for the implementation boundary. Keep these gaps explicit rather than weakening acceptance.
+
+Part of #3, under #1. Can start against mocked responses once map/job contracts settle; integrated completion is blocked by #2 and #6. Completing all #3 children satisfies #3 only after the full fixture-backed Electron renderer journey passes. See the [implementation plan](../implementation-plan.md).
 
 ## Problem Statement
 
@@ -39,16 +45,16 @@ Connect the existing map to the completed job API, exposing explicit import, man
 
 ## Testing Decisions
 
-- Retain the user-confirmed job API seam with test Postgres and deterministic fixture adapters, plus the existing map browser journey where UI behavior is involved. Assert observable behavior, not implementation internals.
-- Extend the confirmed browser journey: select an area, start a fixture-backed import, observe progress, reload/reconnect, then see committed listings on the map and list.
+- Retain the user-confirmed worker API seam with temporary SQLite databases and deterministic fixture adapters, plus the existing map Electron renderer journey where UI behavior is involved. Assert observable behavior, not implementation internals.
+- Extend the confirmed Electron renderer journey: select an area, start a fixture-backed import, observe progress, reload/reconnect, then see committed listings on the map and list.
 - Verify map movement alone never starts collection, a changed selection does not mutate a running job area, the queue is visible/cancellable, and manual-refresh follow-ups remain pending and cancellable.
 - Verify partial outcomes expose Continue search and restart explanations; saved results and timestamps remain visible after failure; terminal messages distinguish empty success, truncation, cancellation, and failure.
 - Verify verified/unverified individual pins, municipality summary counts and lists, unknown-location offers, and Show unavailable use the established map contract after imports.
-- The repository currently has no job test precedent. Introduce only necessary tooling and use controlled clocks/network responses; automated checks make no live bank requests.
+- Extend the SQLite worker tests and Electron end-to-end journey with only necessary tooling and use controlled clocks/network responses; automated checks make no live bank requests.
 
 ## Out of Scope
 
-Database design, worker scheduling policies, source access, and live adapters are owned by prerequisite specs. Use their API contracts and do not reimplement job logic in the browser.
+Database design, worker scheduling policies, source access, and live adapters are owned by prerequisite specs. Use their API contracts and do not reimplement job logic in the renderer.
 
 - Hosted deployment, nightly or nationwide collection, paid discovery, translation, image mirroring, and fuzzy cross-source merging remain excluded.
 
@@ -58,8 +64,8 @@ Database design, worker scheduling policies, source access, and live adapters ar
 
 ## Contract consumption and fixture handoff
 
-Use #2's `SelectedArea`/`AreaQuery`, #5's `ListingProjection`, `AreaResults`, job endpoints and base snapshots, and #6's policy examples as the shared mock recipes. Do not independently define browser job states, source cursors or listing shapes. Expand snapshot replacements into full mocked GET responses; use the same expanded fixtures at the job-API seam once the backend exists. Source references remain synthetic, and sample mode stays visible.
+Use #2's `SelectedArea`/`AreaQuery`, #5's `ListingProjection`, `AreaResults`, job operations and base snapshots, and #6's policy examples as the shared mock recipes. Do not independently define browser job states, source cursors or listing shapes. Expand snapshot replacements into full mocked inspection responses; use the same expanded fixtures at the job-API seam once the backend exists. Source references remain synthetic, and sample mode stays visible.
 
 Reconnect using request ID, then poll its linked job IDs and the active queue. A job's success is insufficient while the request says pendingFollowUp. Show immutable job area separately from the current selection. Refresh the current area's saved-data query on each observed terminal job/request transition, including failure/cancellation; do not replace the selection with job area. Map movement calls only the query boundary. Abort/stale-query handling prevents an older query response overwriting a newer selection.
 
-Fixture matrix: #5 queued/running => visible queue/stage and counts; empty success => Search finished with zero additions; #6 budget partial => saved pins and Continue search; expired cursor => restart explanation; manual attachment/follow-up => pending then queued then final request outcome; cancellation => retained records and Cancelled; blocked source => Failed with existing results retained. Coverage caveats and unknown successful-check times remain visible for every outcome. Mock development can start now; completion still requires #2/#6 integration and the agreed real-runtime browser journey. Use simulated DOM tests for control/status/error behavior, real browser checks for map rendering/gestures and the required selected-area import journey, and API/test-Postgres fixtures for scheduling/policy edges as CODING_STANDARDS.md requires.
+Fixture matrix: #5 queued/running => visible queue/stage and counts; empty success => Search finished with zero additions; #6 budget partial => saved pins and Continue search; expired cursor => restart explanation; manual attachment/follow-up => pending then queued then final request outcome; cancellation => retained records and Cancelled; blocked source => Failed with existing results retained. Coverage caveats and unknown successful-check times remain visible for every outcome. Mock development can start now; completion still requires #2/#6 integration and the agreed real-runtime Electron renderer journey. Use simulated DOM tests for control/status/error behavior, real browser checks for map rendering/gestures and the required selected-area import journey, and worker/SQLite fixtures for scheduling/policy edges as CODING_STANDARDS.md requires.

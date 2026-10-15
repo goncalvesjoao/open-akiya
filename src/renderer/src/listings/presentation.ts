@@ -1,4 +1,4 @@
-import type { ListingProjection } from './contracts'
+import type { ListingProjection } from '../../../shared/listings'
 
 // Authored English labels for fictional fixtures, not source translations.
 const sampleTitles: Record<string, string> = {

@@ -1,10 +1,16 @@
 # On-demand local akiya imports by map area
 
+## Desktop runtime
+
+Use Electron, React/TypeScript, a utility-process worker and worker-owned SQLite. Job operations cross a validated, context-isolated preload bridge; there is no local HTTP server. The renderer cannot access Node.js, SQL, source observations or arbitrary IPC. Closing the window keeps the application and imports running; reopening from the launcher restores the window. Explicit Quit stops scheduling and preserves committed work for recovery on restart. Cancelled work never resumes automatically. Sleep, shutdown and process crashes interrupt execution; no operating-system service or scheduling while fully exited is promised.
+
+The full acceptance requirements below remain targets. The desktop foundation implements basic synthetic create/list/inspect/cancel/results operations, exact-area active-job reuse and restart recovery. It does **not** complete freshness/containment policies, request-intent ownership, manual-refresh follow-ups, bounded continuation, rich job counters, all location variants, address lookup or live-source activation. See [desktop runtime](../desktop-runtime.md) for the implementation boundary. Keep these gaps explicit rather than weakening acceptance.
+
 Category: enhancement. Triage role: ready-for-agent. Spec labels: spec and status/todo unless an existing status label applies. The user confirmed the testing approach before publication.
 
 ## Problem Statement
 
-People exploring vacant homes in Japan need listings for an area they care about without manually searching multiple banks. A nationwide scheduled collector would request and retain information they may never use. Open Akiya currently has a landing page and a basic Supabase listings schema, but no interactive map, local job service, or ingestion adapters.
+People exploring vacant homes in Japan need listings for an area they care about without manually searching multiple banks. A nationwide scheduled collector would request and retain information they may never use. The active Electron foundation has a sample map and durable synthetic jobs; production adapters and the complete import policies remain to be implemented.
 
 This is an open-source application people run locally. It is not a centrally deployed listing aggregator, and scraped datasets are not distributed with its code.
 
@@ -16,7 +22,7 @@ Nearby cached results and overlapping in-flight requests are reused. Geographic 
 
 ## User Stories
 
-1. As a local user, I want documented setup for the app, backend, and database, so that I can run everything on my machine.
+1. As a local user, I want documented desktop installation and launch, so that I can run everything on my machine.
 2. As a user, I want an interactive map, so that I can choose an area to explore.
 3. As a user, I want to select a center and radius, so that I control the area requested.
 4. As a user, I want a clearly displayed 10 km radius limit, so that I understand the maximum search scope.
@@ -56,9 +62,9 @@ Nearby cached results and overlapping in-flight requests are reused. Geographic 
   2. [#3 — Local area import jobs and map progress](https://github.com/goncalvesjoao/open-akiya/issues/3), dependent on #2; aggregate acceptance parent for implementation specs [#5](https://github.com/goncalvesjoao/open-akiya/issues/5) (persistent runtime/storage), [#6](https://github.com/goncalvesjoao/open-akiya/issues/6) (reuse/refresh/continuation), and [#7](https://github.com/goncalvesjoao/open-akiya/issues/7) (map UI integration).
   3. [#4 — First permitted live source for bounded area imports](https://github.com/goncalvesjoao/open-akiya/issues/4), dependent on #3.
 - The map and fixture-backed flow can be completed independently of live-source authorization. Parent completion requires all three child specs; live-source acceptance remains unmet until an enabled permitted adapter is verified.
-- Use the existing TypeScript frontend and local Supabase Postgres. Add a local TypeScript backend/worker that runs independently of browser navigation. Document local Supabase/Docker prerequisites and one startup command after prerequisites are installed. The synthetic map is independently releasable without the backend. Do not require a hosted Supabase project.
-- Bind the backend to loopback by default, restrict accepted browser origins, and validate mutation requests. Keep privileged database credentials server-side. Browser clients cannot write operational tables.
-- An area consists of a validated latitude/longitude center and a positive radius no greater than 10 km. Enforce the limit on both client and server. Show the circle on the map. Choose a map library and tile provider during implementation and document attribution and network requirements; local operation does not imply offline tiles.
+- Use Electron with a React/TypeScript renderer, a TypeScript utility-process worker and embedded SQLite in the per-user application data directory. Installed users launch one desktop application; no Docker, Supabase, database server or Node.js installation is required. Keep work independent of renderer reloads and window visibility.
+- Operational tables and source observations stay inside the worker-owned SQLite database. The sandboxed renderer receives only approved listing/job projections through a narrow context-isolated preload bridge. Validate operation arguments in the worker and sender/frame identity in the main process; expose no SQL, filesystem, generic IPC or privileged credentials. Local imports do not alter editorial publication decisions.
+- An area consists of a validated latitude/longitude center and a positive radius no greater than 10 km. Enforce the limit in both renderer and worker. Show the circle on the map. Choose a map library and tile provider during implementation and document attribution and network requirements; local operation does not imply offline tiles.
 - The job API supports create, inspect, and cancel. Create returns an accepted job identifier immediately or identifies reused cached/in-flight work. Inspection returns state, stage, meaningful counts, timestamps, source outcomes, truncation reasons, and sanitized errors. Do not invent a percentage when the total is unknown.
 - Job states are queued, running, succeeded, partial, failed, and cancelled. Cancellation is idempotent and cooperative: stop new outbound requests, allow an active request/transaction to settle, preserve committed results, and report the cancellation.
 - Persist jobs, source tasks, checkpoints, and leases in the local database. Restart recovery reclaims expired work without duplicating committed listings. A browser refresh reconnects to the stored job. Polling is sufficient for the first version.
@@ -74,7 +80,7 @@ Nearby cached results and overlapping in-flight requests are reused. Geographic 
 - Source adapters separate discovery, detail retrieval, and deterministic normalization. Use source-native geographic filters when available. A municipality-only adapter may discover broadly within the request budget, but fetch details only for candidates known or plausibly likely to intersect the requested area. Disclose uncertainty and truncated coverage. Do not run unlimited municipal scans to satisfy a radius request.
 - At Home and LIFULL HOME'S are candidate integrations, not presumed authorized sources. Record access method, source terms, permission evidence where applicable, attribution, reuse limits, and rate policy per adapter. Keep unresolved adapters disabled; never bypass access blocks. Ship synthetic fixtures rather than scraped datasets or images.
 - One permitted municipal source is sufficient for the first live-source milestone if national-bank access remains unresolved. Explain unsupported areas rather than implying nationwide coverage.
-- Extend the existing listing schema through migrations. Preserve Japanese text, primary source URL, editorial visibility, and existing identifiers. Add source identities unique within each provider, separate sale price and monthly rent, property type, optional floor/land area, availability independent of publication status, first/last seen and successful-check timestamps, location precision/provenance, and normalized content hashes.
+- Create a versioned SQLite schema. Preserve Japanese text, primary source URL, editorial visibility, and existing identifiers. Add source identities unique within each provider, separate sale price and monthly rent, property type, optional floor/land area, availability independent of publication status, first/last seen and successful-check timestamps, location precision/provenance, and normalized content hashes.
 - Normalize money to integer yen and areas to square metres. Missing prices are null; zero means explicitly free. Do not guess missing listing addresses or coordinates or geocode listing positions. User-entered address/place lookup for the selected-area center is allowed under #38. Show individual pins for source-provided positions, labeling unverified accuracy and approximate distance as applicable; distinguish them from verified in-radius positions.
 - Offers with only a known municipality use a distinct municipality summary pin with a count and list for municipalities intersecting the circle. Use a documented representative point, possibly outside the circle, and explain that it is not a house location and distance from the selected center is unknown. Offers with neither usable coordinates nor municipality stay in an Unknown location list without a pin.
 - Save source observations and public projections transactionally and idempotently. Preserve multiple source references for confirmed duplicate offers; uncertain cross-source matches remain separate. Sale and rental offers cannot overwrite each other. Partial responses cannot erase known values or moderation decisions.
@@ -85,9 +91,9 @@ Nearby cached results and overlapping in-flight requests are reused. Geographic 
 
 ## Testing Decisions
 
-- Confirmed primary seam: the local job API exercised against a test database and deterministic fixture-backed source adapters. Assert externally observable jobs, saved records, request counts, and outcomes rather than internal function calls or queue structure.
-- Add one browser-level journey that selects an area, starts collection, observes running state, and sees saved results on the map. Include refresh/reconnection at this seam where practical.
-- The repository currently has no test suite or ingestion test precedent. Introduce only the tooling needed for these observable behaviors; keep live source network calls out of automated tests.
+- Confirmed primary seam: the local job API exercised against a temporary SQLite database and deterministic fixture-backed source adapters. Assert externally observable jobs, saved records, request counts, and outcomes rather than internal function calls or queue structure.
+- Add one Electron end-to-end journey that selects an area, starts collection, observes running state, and sees saved results on the map. Include refresh/reconnection at this seam where practical.
+- Extend the existing worker, React and Electron tests for these observable behaviors; keep live source network calls out of automated tests.
 - Cover invalid radius rejection without outbound requests; idempotent retries and double clicks; full cache containment versus partial overlap; budget exhaustion; cancellation; crash/restart recovery; one source failing while another succeeds; successful empty results versus failure; and unauthorized backend mutation attempts.
 - Cover queue cancellation and active-work reuse; manual refresh of recent area/detail caches; bounded continuation without premature coverage/checkpoint advancement; equal-date ties and unrelated-area checkpoints; older known-offer updates after discovery stops; and previously saved results surviving refresh failure.
 - Cover expired/invalid continuation cursors with safe bounded restart and no duplicate records; mixed new/stale work with reserved refresh capacity and unused-capacity reuse; and manual refresh attaching to ordinary work that skipped fresh details, ensuring missing rechecks queue without premature success or duplicate requests.
@@ -106,7 +112,6 @@ Nearby cached results and overlapping in-flight requests are reused. Geographic 
 
 ## Further Notes
 
-- This replaces the earlier nightly-worker proposal. That document remains background research, not the current execution architecture.
 - The design interview confirmed the 10 km limit, freshness and request-budget defaults, queue/continuation behavior, location model, and unchanged testing seams. Implementation must verify source-specific capabilities before enabling optimizations.
 - Source context: [MLIT national-bank overview](https://www.mlit.go.jp/totikensangyo/const/sosei_const_tk3_000131.html), [At Home terms](https://www.akiya-athome.jp/contents/index/?page=kiyaku), and [LIFULL terms](https://www.homes.co.jp/kiyaku/).
 - The repository uses GitHub Issues and the canonical triage-label vocabulary.

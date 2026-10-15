@@ -1,6 +1,6 @@
 # First live source investigation: Tsubata Town open-data CSV
 
-Reviewed 15 October 2026 (Asia/Tokyo). Research only; no adapter enabled, pilot completed, issue closed, or implementation tickets created. Read alongside [the live-source spec](../specs/live-area-source-integration.md), [implementation plan](../implementation-plan.md), [background research](../nightly-listing-ingestion-plan.md), and [ADR-0001](../adr/0001-local-import-runtime.md). The parent investigation read [issue #4](https://github.com/goncalvesjoao/open-akiya/issues/4) and found no comments at review time.
+Reviewed 15 October 2026 (Asia/Tokyo). Research only; no adapter enabled, pilot completed, issue closed, or implementation tickets created. Read alongside [the live-source spec](../specs/live-area-source-integration.md), [implementation plan](../implementation-plan.md), [background research](listing-sources.md), and [ADR-0002](../adr/0002-electron-local-runtime.md). The parent investigation read [issue #4](https://github.com/goncalvesjoao/open-akiya/issues/4) and found no comments at review time.
 
 ## Candidate and decision
 

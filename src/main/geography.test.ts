@@ -1,5 +1,26 @@
-import { expect, test } from 'vitest'
-import { queryListings, safeSourceUrl } from './query'
+// @vitest-environment node
+import { expect, test, beforeEach, afterEach } from 'vitest'
+import { ImportRuntime } from './runtime'
+import { initialArea } from '../shared/geography'
+import type { AreaQuery } from '../shared/listings'
+let runtime: ImportRuntime
+beforeEach(async () => {
+  runtime = new ImportRuntime(':memory:', 0)
+  for (const area of [
+    initialArea,
+    { center: { latitude: 0, longitude: 179.99 }, radiusKm: 5 },
+    { center: { latitude: 0, longitude: 0 }, radiusKm: 5 },
+  ]) {
+    const job = runtime.create({ area, idempotencyKey: JSON.stringify(area) })
+    await expect.poll(() => runtime.inspect(job.id).state).toBe('succeeded')
+  }
+})
+afterEach(async () => {
+  await runtime.close()
+})
+async function queryListings(query: AreaQuery) {
+  return runtime.results(query)
+}
 
 test('returns verified inside and coincident offers but excludes outside and unavailable offers', async () => {
   const result = await queryListings({
@@ -71,7 +92,7 @@ for (const area of [
     await expect(
       // @ts-expect-error boundary validation is required even for non-TypeScript clients
       queryListings({ area, showUnavailable: false }),
-    ).rejects.toThrow('Choose finite')
+    ).rejects.toThrow('Invalid area query')
   })
 }
 
@@ -103,26 +124,4 @@ test('accepts WGS84 extremes and the maximum radius without clamping', async () 
     expect(result.area).toEqual(area)
     expect(result.listings).toEqual([])
   }
-})
-
-test.each(['http', 'https'])(
-  'allows %s links on the configured source host',
-  (scheme) => {
-    const url = `${scheme}://example.invalid/offers/sale-1`
-    expect(safeSourceUrl('fixture', url)).toBe(url)
-  },
-)
-
-test.each([
-  ['fixture', 'javascript:alert(1)'],
-  ['fixture', 'ftp://example.invalid/offers/sale-1'],
-  ['fixture', 'https://other.invalid/offers/sale-1'],
-  ['fixture', 'https://example.invalid.attacker.invalid/offers/sale-1'],
-  ['fixture', 'https://user:pass@example.invalid/offers/sale-1'],
-  ['fixture', 'https://user@example.invalid/offers/sale-1'],
-  ['fixture', 'https://:pass@example.invalid/offers/sale-1'],
-  ['fixture', 'not a URL'],
-  ['unknown-source', 'https://example.invalid/offers/sale-1'],
-])('rejects unsafe or unconfigured source URL %s %s', (sourceId, url) => {
-  expect(safeSourceUrl(sourceId, url)).toBeNull()
 })

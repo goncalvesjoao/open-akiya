@@ -4,19 +4,19 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "eslint .",
+    "dev": "electron-vite dev --watch",
+    "build": "tsc --noEmit && electron-vite build",
+    "start": "electron-vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui",
+    "test:e2e": "npm run build && playwright test",
+    "lint": "eslint src *.ts",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
-    "preview": "vite preview"
+    "package": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.0.0",
     "leaflet": "^1.9.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
@@ -31,6 +31,9 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "electron": "44.7.2",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^6.0.0",
     "eslint": "^9.0.0",
     "eslint-plugin-react-hooks": "^7.0.0",
     "eslint-plugin-react-refresh": "^0.4.0",
@@ -43,6 +46,37 @@
     "vitest": "^5.0.4"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=24.0.0"
+  },
+  "description": "Explore akiya listings locally with a durable desktop import worker.",
+  "author": "Open Akiya contributors",
+  "license": "MIT",
+  "main": "out/main/index.cjs",
+  "build": {
+    "appId": "org.openakiya.desktop",
+    "productName": "Open Akiya",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
   }
 }

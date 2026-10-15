@@ -1,6 +1,6 @@
 # Implementation plan
 
-This is the execution plan for [parent spec #1](https://github.com/goncalvesjoao/open-akiya/issues/1). Requirements and acceptance tests belong to the linked specs; this document owns coordination, parallel work, and integration gates. The project currently has a landing page and a basic listing schema; this plan does not claim implementation work is complete.
+This is the execution plan for [parent spec #1](https://github.com/goncalvesjoao/open-akiya/issues/1). Requirements and acceptance tests belong to the linked specs; this document owns coordination, parallel work, and integration gates. The active Electron foundation supplies a map and durable synthetic jobs; this plan does not claim the policy or live-source backlog is complete.
 
 ## Implementation worklist
 
@@ -13,7 +13,7 @@ The groups below are a recommended execution order, not new blocking relationshi
 - [#8 — Explore verified sample listings within a selected area](https://github.com/goncalvesjoao/open-akiya/issues/8)
 - [#13 — Import and inspect one synthetic listing through a durable local job](https://github.com/goncalvesjoao/open-akiya/issues/13)
 
-#13 includes local Docker/Supabase prerequisites, the job API test harness and transactional storage foundation. Neither foundation requires a permitted live source.
+#13 now targets Electron launch, the utility-process worker, temporary SQLite test databases and transactional storage. Neither foundation requires a permitted live source.
 
 ### 2. Extend the map and local runtime
 
@@ -36,7 +36,7 @@ After #13, build the runtime capabilities:
 - [#18 — Recover interrupted imports without replaying committed effects](https://github.com/goncalvesjoao/open-akiya/issues/18)
 - [#19 — Retain current-source availability when another source withdraws an offer](https://github.com/goncalvesjoao/open-akiya/issues/19)
 
-#14–#17 can start after #13. #18 requires #16 and #17; #19 requires #14. Verify the runtime through the shared job API seam with test Postgres and deterministic adapters.
+#14–#17 can start after #13. #18 requires #16 and #17; #19 requires #14. Verify the runtime through the shared job API seam with temporary SQLite databases and deterministic adapters.
 
 ### 3. Implement reuse, refresh and continuation
 
@@ -59,7 +59,7 @@ After #13, build the runtime capabilities:
 - [#31 — Continue incomplete searches with truthful outcomes](https://github.com/goncalvesjoao/open-akiya/issues/31)
 - [#32 — Explore imported listings through the real local workflow](https://github.com/goncalvesjoao/open-akiya/issues/32)
 
-#27 can start with mocked API responses; its map demo needs #8. #28, #29 and #31 start after #27; #30 starts after #27 and #28. #30 is needed for #31's exhausted-refresh-follow-up scenario, rather than all continuation development. #32 requires the preceding UI slices and completed #2/#6, including the real runtime. Reuse the agreed fixtures rather than creating browser-only response shapes.
+#27 can start with mocked API responses; its map demo needs #8. #28, #29 and #31 start after #27; #30 starts after #27 and #28. #30 is needed for #31's exhausted-refresh-follow-up scenario, rather than all continuation development. #32 requires the preceding UI slices and completed #2/#6, including the real runtime. Reuse the agreed fixtures rather than creating renderer-only response shapes.
 
 After #5, #6 and #7 pass their integrated acceptance, evaluate aggregate #3. #1 and #3 are acceptance parents, not additional implementation tickets.
 
@@ -80,13 +80,13 @@ When all acceptance gates for #2, #3 and #4 pass, evaluate parent #1 completion.
 
 ## Start conditions and completion gates
 
-| Spec                                                                                        | When work can start                                                                                   | Required to finish                                                                          |
-| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| [#2 Map and area selection](https://github.com/goncalvesjoao/open-akiya/issues/2)           | Immediately, using synthetic listings                                                                 | Independent map and accessibility checks                                                    |
-| [#5 Persistent runtime and storage](https://github.com/goncalvesjoao/open-akiya/issues/5)   | In parallel with #2 once the shared area/listing contracts are agreed                                 | Durable job API, normalized storage, privacy, cancellation, and recovery checks             |
-| [#6 Reuse, refresh, and continuation](https://github.com/goncalvesjoao/open-akiya/issues/6) | Once #5's job and adapter contracts settle; fixtures can precede its completed runtime                | Integration with #5 and policy tests                                                        |
-| [#7 Map import UI](https://github.com/goncalvesjoao/open-akiya/issues/7)                    | Once map and job contracts settle, using mocked API responses while #2, #5, or #6 finish              | Completed #2 and #6, plus the fixture-backed browser journey against the real local runtime |
-| [#4 First permitted live source](https://github.com/goncalvesjoao/open-akiya/issues/4)      | Source/access investigation immediately; adapter development once source and adapter contracts settle | Completed #3, a permitted enabled source, and a documented live pilot                       |
+| Spec                                                                                        | When work can start                                                                                   | Required to finish                                                                           |
+| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| [#2 Map and area selection](https://github.com/goncalvesjoao/open-akiya/issues/2)           | Immediately, using synthetic listings                                                                 | Independent map and accessibility checks                                                     |
+| [#5 Persistent runtime and storage](https://github.com/goncalvesjoao/open-akiya/issues/5)   | In parallel with #2 once the shared area/listing contracts are agreed                                 | Durable job API, normalized storage, privacy, cancellation, and recovery checks              |
+| [#6 Reuse, refresh, and continuation](https://github.com/goncalvesjoao/open-akiya/issues/6) | Once #5's job and adapter contracts settle; fixtures can precede its completed runtime                | Integration with #5 and policy tests                                                         |
+| [#7 Map import UI](https://github.com/goncalvesjoao/open-akiya/issues/7)                    | Once map and job contracts settle, using mocked API responses while #2, #5, or #6 finish              | Completed #2 and #6, plus the fixture-backed Electron journey against the real local runtime |
+| [#4 First permitted live source](https://github.com/goncalvesjoao/open-akiya/issues/4)      | Source/access investigation immediately; adapter development once source and adapter contracts settle | Completed #3, a permitted enabled source, and a documented live pilot                        |
 
 [#3](https://github.com/goncalvesjoao/open-akiya/issues/3) is the aggregate acceptance parent for #5, #6, and #7, not another implementation task. It closes only after all three children and the integrated fixture-backed journey pass. #1 closes after #2, #3, and #4 pass.
 
@@ -137,8 +137,8 @@ Keep those GitHub relationships synchronized when this plan changes. The specs r
 ## Integration and release checkpoints
 
 1. Independently release the labeled sample-data map after #2 passes.
-2. Verify #5 at the existing job API seam with local test Postgres and synthetic adapters.
-3. Verify #6 policies at that same seam, then connect #7 to the real runtime and run the agreed browser journey. Close #3 only after integrated acceptance.
+2. Verify #5 at the existing job API seam with local temporary SQLite databases and synthetic adapters.
+3. Verify #6 policies at that same seam, then connect #7 to the real runtime and run the agreed Electron journey. Close #3 only after integrated acceptance.
 4. Run the permitted source's small live pilot after #3 passes, then evaluate #4 and parent #1 completion. No unresolved source permission is treated as a completed live integration.
 
 Do not add duplicate implementation tasks for #1 or #3. Preserve bounded requests, local-only storage, no paid discovery, and the user-confirmed scope throughout parallel work.

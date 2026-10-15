@@ -1,10 +1,16 @@
 # Map, listing pins, and bounded area selection
 
-Part of #1. Can start immediately and run alongside #5 after shared contract alignment; no import service or live source dependency. See the [implementation plan](../implementation-plan.md).
+## Desktop runtime
+
+Use Electron, React/TypeScript, a utility-process worker and worker-owned SQLite. Job operations cross a validated, context-isolated preload bridge; there is no local HTTP server. The renderer cannot access Node.js, SQL, source observations or arbitrary IPC. Closing the window keeps the application and imports running; reopening from the launcher restores the window. Explicit Quit stops scheduling and preserves committed work for recovery on restart. Cancelled work never resumes automatically. Sleep, shutdown and process crashes interrupt execution; no operating-system service or scheduling while fully exited is promised.
+
+The full acceptance requirements below remain targets. The desktop foundation implements basic synthetic create/list/inspect/cancel/results operations, exact-area active-job reuse and restart recovery. It does **not** complete freshness/containment policies, request-intent ownership, manual-refresh follow-ups, bounded continuation, rich job counters, all location variants, address lookup or live-source activation. See [desktop runtime](../desktop-runtime.md) for the implementation boundary. Keep these gaps explicit rather than weakening acceptance.
+
+Part of #1. Can start immediately and run alongside #5 after shared contract alignment; no live source dependency; the desktop foundation supplies the saved-result query worker. See the [implementation plan](../implementation-plan.md).
 
 ## Problem Statement
 
-Open Akiya currently offers a landing page rather than a way to explore listings geographically. Users need a map and a clear area selection before they can request an area import.
+The Electron app provides a basic synthetic map and reads saved sample imports. Users need a map and a clear area selection before they can request an area import.
 
 ## Solution
 
@@ -38,11 +44,11 @@ Provide a responsive map and companion results list using clearly labeled synthe
 
 - Use English for the current interface, including navigation, controls, statuses, accessible names and synthetic listing display titles. English and Japanese may become interface locales later; no locale selector or Japanese interface is required now. Keep original Japanese source fields unchanged and available in a separately labeled, initially collapsed original-source section. Authored English synthetic fixture labels are presentation text, not translations of real source content. Do not change the shared listing DTO or introduce automatic translation.
 
-- Build on the existing React/TypeScript app and retain a clear route or navigation back to project information. No backend is required for this milestone.
+- Build on the React/TypeScript renderer and keep the project purpose visible. Use the bundled utility-process worker for saved results; no separately provisioned backend is required.
 - Choose a map library and tile provider during implementation; document attribution, configuration, network requirements, and any required user key. Locally running does not mean offline tiles. Do not require browser geolocation.
 - Represent the selected area with center latitude/longitude and radius in kilometres; validate finite coordinates and a radius greater than zero and at most 10. Provide pointer selection and labeled keyboard-operable coordinate/radius controls.
 - The circle represents geographic distance, not a screen-space approximation. Include the boundary in the precise-location result filter. Selection changes update displayed sample results but never create import jobs.
-- Define a replaceable listing-query boundary whose initial implementation returns synthetic fixtures. Its input is the area; its output distinguishes verified in-area positions, source-provided unverified/approximate positions, municipality-only groups, and unknown-location candidates, with freshness and coverage metadata reserved for later integration. An empty collection is different from a failed query.
+- Define a replaceable listing-query boundary whose desktop implementation reads imported synthetic fixtures from SQLite. Its input is the area; its output distinguishes verified in-area positions, source-provided unverified/approximate positions, municipality-only groups, and unknown-location candidates, with freshness and coverage metadata reserved for later integration. An empty collection is different from a failed query.
 - Use stable listing identifiers, Japanese title, original source reference, sale/rent amounts, availability, and location precision. Missing money is unknown; zero is explicitly free. Avoid inventing coordinates, translations, or source data. Use synthetic identifiers and clearly non-real fixture content.
 - Keep pin selection and list selection synchronized. Show the same details and original-source action from either. Show individual pins at source-provided coordinates even if unverified, using distinct styling and a Location unverified label. Approximate positions also explain that distance from the selected center is uncertain; coordinate-based candidate inclusion is not verified radius membership.
 - Group offers with only municipality-level locations by municipality intersecting the selected circle. Use a distinct municipality summary pin at a documented representative point, such as the municipal office, with a count and selectable list. Its label explains that exact locations and distance from the selected center are unknown. The representative point may lie outside the circle; do not exclude a group solely for that reason. Keep provenance for the representative point and do not display it as a house location.
@@ -54,10 +60,10 @@ Provide a responsive map and companion results list using clearly labeled synthe
 
 ## Testing Decisions
 
-- Use the previously confirmed browser-level seam with deterministic synthetic listings; test user-visible selection, radius validation, marker/list correspondence, details, and source navigation. The full import journey is extended in the next spec.
+- Use the previously confirmed Electron end-to-end seam with deterministic synthetic listings; test user-visible selection, radius validation, marker/list correspondence, details, and source navigation. The full import journey is extended in the next spec.
 - Assert geographic filtering at the listing-query boundary using known inside, outside, boundary, unverified, approximate, municipality-only, unknown-location, and coincident-location examples. Include an intersecting municipality whose summary point is outside the circle. Verify summary counts/list navigation, unverified labels, distance uncertainty, and Show unavailable behavior. Prefer observable result membership over map-library internals.
 - Verify keyboard area selection, invalid numeric input, empty/error states, and a mobile viewport. Test tiles with controlled network responses so checks do not depend on a live provider.
-- There is no existing map or testing precedent in this repository. Introduce only the tooling needed for these behavior checks; automated tests make no live bank requests.
+- Extend the existing map, SQLite and Electron checks for these behaviors; automated tests make no live bank requests.
 
 ## Out of Scope
 
@@ -67,7 +73,7 @@ Provide a responsive map and companion results list using clearly labeled synthe
 
 ## Further Notes
 
-- This is the first deliverable under the confirmed parent spec. It is complete when the fixture-backed exploration flow works independently of source permissions or backend setup.
+- This is the first deliverable under the confirmed parent spec. It is complete when the fixture-backed exploration flow works without live-source permissions or external backend setup.
 
 ## Shared selected-area and query contract
 
@@ -79,9 +85,9 @@ type SelectedArea = { center: Point; radiusKm: number }
 type AreaQuery = { area: SelectedArea; showUnavailable: boolean }
 ```
 
-Coordinates are WGS84 decimal degrees, latitude in [-90, 90], longitude in [-180, 180]; all numbers must be finite. Radius is kilometres, strictly positive and at most 10; no silent clamping. Reject numeric strings, nulls and missing members at the API. Invalid control drafts retain the last valid area. Server and client apply the same validation. Preserve the accepted coordinates/radius in job input; map movement cannot mutate it. Distances and circle containment use geodesic distance in metres internally, with boundary included; longitude wrapping must work across the antimeridian. No Japan-only coordinate restriction is implied by source support.
+Coordinates are WGS84 decimal degrees, latitude in [-90, 90], longitude in [-180, 180]; all numbers must be finite. Radius is kilometres, strictly positive and at most 10; no silent clamping. Reject numeric strings, nulls and missing members at the API. Invalid control drafts retain the last valid area. Worker and renderer apply the same validation. Preserve the accepted coordinates/radius in job input; map movement cannot mutate it. Distances and circle containment use geodesic distance in metres internally, with boundary included; longitude wrapping must work across the antimeridian. No Japan-only coordinate restriction is implied by source support.
 
-Example query-boundary input (also the area-results POST body):
+Example query-boundary input (also the `areaResults(query)` input):
 
 ```json
 {
@@ -90,7 +96,7 @@ Example query-boundary input (also the area-results POST body):
 }
 ```
 
-The replaceable boundary is `queryListings(query: AreaQuery): Promise<AreaResults>` using #5's response. Synthetic mode implements exactly this boundary without requiring a backend. Querying results reads saved data and never starts collection. Query errors reject distinctly from a successful empty response.
+The replaceable boundary is `queryListings(query: AreaQuery): Promise<AreaResults>` using #5's response. Synthetic mode implements this boundary through the bundled worker without requiring an external backend. Querying results reads saved data and never starts collection. Query errors reject distinctly from a successful empty response.
 
 Verified coordinates are filtered by inclusive circle membership. Unverified/approximate source points inside the circle are uncertain candidates, never verified membership. Municipality-only offers are included when their known municipality intersects the circle, regardless of the representative point. Unknown-location candidates require saved discovery evidence associating them with this area or an intersecting source query; do not return every unknown listing in the installation. A known precise outside point overrides broad query membership and is excluded. Municipality identity/intersection and representative-point provenance come from a documented reference or adapter evidence; absent evidence is unsupported coverage, not invented geography.
 

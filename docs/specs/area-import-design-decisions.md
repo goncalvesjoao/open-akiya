@@ -4,7 +4,7 @@ Record of user-confirmed decisions reconciled into specs #1–#4 after final con
 
 ## Confirmed decisions
 
-- Use local Supabase and Docker, with one documented startup command after prerequisites. The sample-data map is independently releasable before jobs and live integrations.
+- Use an Electron application with a TypeScript utility-process worker and embedded SQLite, as recorded in ADR-0002.
 - One permitted municipal source is sufficient for the first live-source milestone if national-bank access remains unresolved. Explain unsupported geographic areas.
 - Represent offers with only municipality-level locations from municipalities intersecting the selected circle with distinct municipality summary pins. Include their counts and listing lists, explicitly saying distance from the selected center is unknown. A representative point may lie outside the circle.
 - Prefer a documented municipal representative point, such as its municipal office, rather than a location that appears to identify a house. Use a distinct icon and an exact-location-unknown label. Offers without a known municipality stay in an unknown-location list without a pin.
@@ -25,7 +25,7 @@ Record of user-confirmed decisions reconciled into specs #1–#4 after final con
 
 ## Interview status
 
-The user confirmed the shared understanding after all question rounds. The specs incorporate these decisions. Confirmed testing seams remain unchanged: fixture-backed job API tests and the browser journey from selected area to saved map results. The four specs are authoritative for implementation; this file preserves interview context.
+The user confirmed the shared understanding after all question rounds. The specs incorporate these decisions. Confirmed behavioral testing seams are retained through SQLite-backed worker tests and the Electron journey from selected area to saved map results. The four specs are authoritative for implementation; this file preserves interview context.
 
 ## Source-ordering evidence
 

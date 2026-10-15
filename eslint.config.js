@@ -5,7 +5,15 @@ import reactHooks from 'eslint-plugin-react-hooks'
 import reactRefresh from 'eslint-plugin-react-refresh'
 
 export default tseslint.config(
-  { ignores: ['dist'] },
+  {
+    ignores: [
+      'out/**',
+      'dist/**',
+      'dist-electron/**',
+      'release/**',
+      '.playwright-dist/**',
+    ],
+  },
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -14,6 +22,9 @@ export default tseslint.config(
       reactHooks.configs.flat.recommended,
       reactRefresh.configs.vite,
     ],
-    languageOptions: { ecmaVersion: 2022, globals: globals.browser },
+    languageOptions: {
+      ecmaVersion: 2022,
+      globals: { ...globals.browser, ...globals.node },
+    },
   },
 )

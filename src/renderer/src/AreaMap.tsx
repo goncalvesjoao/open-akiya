@@ -1,3 +1,4 @@
+import ImportControls from './ImportControls'
 import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import { listingTitle } from './listings/presentation'
@@ -6,7 +7,7 @@ import type {
   AreaResults,
   ListingProjection,
   SelectedArea,
-} from './listings/contracts'
+} from '../../shared/listings'
 import {
   distanceMetres,
   initialArea,
@@ -170,7 +171,7 @@ function MapCanvas({
   )
 }
 
-export default function SyntheticMap() {
+export default function AreaMap() {
   const [area, setArea] = useState(initialArea)
   const [draft, setDraft] = useState(['35', '135', '5'])
   const [showUnavailable, setShowUnavailable] = useState(false)
@@ -179,6 +180,7 @@ export default function SyntheticMap() {
   const [error, setError] = useState('')
   const [queryError, setQueryError] = useState('')
   const [loading, setLoading] = useState(true)
+  const [revision, setRevision] = useState(0)
   function selectArea(next: SelectedArea) {
     setLoading(true)
     setQueryError('')
@@ -214,7 +216,7 @@ export default function SyntheticMap() {
     return () => {
       active = false
     }
-  }, [area, showUnavailable])
+  }, [area, showUnavailable, revision])
   const listings = results?.listings ?? []
   const selected = listings.find((listing) => listing.id === selectedId)
   return (
@@ -223,11 +225,11 @@ export default function SyntheticMap() {
       className="synthetic-map container"
       aria-labelledby="map-title"
     >
-      <h2 id="map-title">Synthetic map</h2>
+      <h2 id="map-title">Explore a selected area</h2>
       <p>
         <strong>Sample data only — these are fictional offers.</strong> Click
-        the map to choose a center; drag to pan and use + / − to zoom. No
-        geolocation or collection requests.
+        the map to choose a center; drag to pan and use + / − to zoom. Imports
+        only start when you choose Import sample listings.
       </p>
       <form
         noValidate
@@ -283,6 +285,10 @@ export default function SyntheticMap() {
         />{' '}
         Show unavailable
       </label>
+      <ImportControls
+        area={area}
+        onSettled={() => setRevision((value) => value + 1)}
+      />
       <div className="map-layout">
         <div>
           <MapCanvas

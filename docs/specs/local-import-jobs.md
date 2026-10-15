@@ -1,5 +1,11 @@
 # Local area import jobs and map progress
 
+## Desktop runtime
+
+Use Electron, React/TypeScript, a utility-process worker and worker-owned SQLite. Job operations cross a validated, context-isolated preload bridge; there is no local HTTP server. The renderer cannot access Node.js, SQL, source observations or arbitrary IPC. Closing the window keeps the application and imports running; reopening from the launcher restores the window. Explicit Quit stops scheduling and preserves committed work for recovery on restart. Cancelled work never resumes automatically. Sleep, shutdown and process crashes interrupt execution; no operating-system service or scheduling while fully exited is promised.
+
+The full acceptance requirements below remain targets. The desktop foundation implements basic synthetic create/list/inspect/cancel/results operations, exact-area active-job reuse and restart recovery. It does **not** complete freshness/containment policies, request-intent ownership, manual-refresh follow-ups, bounded continuation, rich job counters, all location variants, address lookup or live-source activation. See [desktop runtime](../desktop-runtime.md) for the implementation boundary. Keep these gaps explicit rather than weakening acceptance.
+
 Part of #1. Blocked by #2. This is an aggregate acceptance spec, implemented through the child specs below with parallel start conditions. Do not treat it as an additional independent implementation task.
 
 ## Implementation plan
@@ -10,11 +16,11 @@ See the [execution plan](../implementation-plan.md) for start conditions, shared
 2. [#6 — Import cache reuse, refresh scheduling, and bounded continuation](https://github.com/goncalvesjoao/open-akiya/issues/6), blocked by #5 for integrated completion; can start once its contracts settle. Owns freshness and coverage reuse, manual-refresh intent, active-work attachment, fair request budgets, checkpoint semantics, continuation, and expired-cursor recovery.
 3. [#7 — Map import controls, queue, progress, and result refresh](https://github.com/goncalvesjoao/open-akiya/issues/7), blocked by #2 and #6 for integrated completion; can start against agreed mock responses. Owns browser controls, visible queue and follow-ups, reconnectable progress, cached-result retention, terminal messages, and map/list integration.
 
-All three children must pass their checks and the fixture-backed browser journey before this parent closes. The complete requirements below remain the acceptance contract; child specs allocate their implementation without removing requirements. Live-source spec #4 remains blocked by this parent.
+All three children must pass their checks and the fixture-backed Electron renderer journey before this parent closes. The complete requirements below remain the acceptance contract; child specs allocate their implementation without removing requirements. Live-source spec #4 remains blocked by this parent.
 
 ## Problem Statement
 
-Users need to request information for a selected area without blocking the UI or losing track of work. Repeated clicks, browser reloads, and overlapping searches must not multiply collection requests. No local backend or job infrastructure exists yet.
+Users need to request information for a selected area without blocking the UI or losing track of work. Repeated clicks, browser reloads, and overlapping searches must not multiply collection requests. The desktop foundation supplies basic synthetic jobs; the full policy and live-source requirements below remain unfinished.
 
 ## Solution
 
@@ -22,7 +28,7 @@ Connect the selected map area to a local, persistent import service. Users expli
 
 ## User Stories
 
-1. As a local user, I want documented frontend, backend, and database startup, so that I can run the tool locally.
+1. As a local user, I want documented desktop installation and launch, so that I can run the tool locally.
 2. As a user, I want cached listings shown before collection, so that existing information is immediately useful.
 3. As a user, I want freshness and coverage information, so that I can judge whether to request an update.
 4. As a user, I want an explicit import button for my selected area, so that map movement does not collect information.
@@ -47,18 +53,18 @@ Connect the selected map area to a local, persistent import service. Users expli
 
 ## Implementation Decisions
 
-- Use local Supabase Postgres and a local TypeScript backend/worker, independent of browser lifetime. Document Docker/Supabase prerequisites and one startup command after prerequisites are installed. Keep privileged credentials server-side, bind to loopback, validate mutation requests, and restrict origins.
-- Add create, inspect, cancel, and area-results API operations. Create validates center coordinates and radius greater than zero and at most 10 km on the server, accepts an idempotency key, and immediately returns a persisted job ID or explicit cache/in-flight reuse outcome. Job input is immutable after creation.
+- Use Electron with a React/TypeScript renderer, a TypeScript utility-process worker and embedded SQLite in the per-user application data directory. Installed users launch one desktop application; no Docker, Supabase, database server or Node.js installation is required. Keep work independent of renderer reloads and window visibility.
+- Add create, inspect, cancel, and area-results API operations. Create validates center coordinates and radius greater than zero and at most 10 km in the worker, accepts an idempotency key, and immediately returns a persisted job ID or explicit cache/in-flight reuse outcome. Job input is immutable after creation.
 - Support explicit manual refresh and search continuation through this API. Manual refresh bypasses area and listing-detail freshness, retaining active-work reuse and all traffic controls. Continue search creates a linked bounded job from saved progress and retains the original scope and accumulated coverage; incomplete, cancelled, or failed traversals cannot advance the completed discovery checkpoint. Cancelled work resumes only on user action.
 - Treat invalid or expired continuation progress as a bounded discovery restart, preserving saved results and reusing identities/details under the request's freshness policy. Report why progress restarted. Do not mark an abandoned traversal complete or advance its checkpoint; the replacement traversal must independently satisfy coverage requirements.
 - Persist refresh intent separately from the shared job so manual refresh attached to ordinary work cannot be satisfied by details that work skipped as fresh. After active work settles, queue the additional required rechecks in bounded follow-up jobs and expose the manual request as pending until those checks finish or report a partial/failed/cancelled outcome. Reuse successful checks performed since the manual request and deduplicate repeated refresh requests. Keep follow-up work visible and cancellable.
 - Inspection exposes state, stage, timestamps, original area, meaningful counters, per-source outcomes, budget usage, and sanitized errors. States are queued, running, succeeded, partial, failed, and cancelled. Report counts rather than fabricated percentages. Persist enough UI context to reconnect to the job after reload; polling is sufficient.
-- Persist jobs, source tasks, checkpoints, coverage records, retry times, and leases. Claim jobs transactionally; reclaim expired leases on restart. Enforce one executing import per installation initially. Cancellation stops scheduling outbound work and preserves completed transactions; inspect and cancel are idempotent.
+- Persist jobs, source tasks, checkpoints, coverage records, retry times, and leases. Claim jobs transactionally under the single worker owner; recover interrupted running work on restart. Keep lease/ownership data if needed for future multiple workers. Enforce one executing import per installation initially. Cancellation stops scheduling outbound work and preserves completed transactions; inspect and cancel are idempotent.
 - Present queued jobs with their immutable areas and allow cancellation before execution. Identical or fully covered requests attach to active work; other requests queue, including partially overlapping areas. Re-evaluate cache and reusable detail work when a queued job starts. Recovery may resume interrupted work but must not revive a user-cancelled job. An already-running request may settle during cancellation; report saved results.
 - Define adapter discovery/detail/normalization contracts and implement a synthetic adapter that can deterministically simulate pagination, changes, delays, failures, and cancellation. Label fixture mode clearly. The next spec supplies the first live implementation.
-- Extend the existing listing schema with provider-scoped stable source identities and observations, transaction type, separate integer sale yen and monthly rent yen, optional decimal areas, availability separate from editorial publication state, location precision/provenance, content hashes, and successful-check timestamps. Preserve current listing IDs, Japanese originals, primary attribution, and visibility decisions through additive migrations.
+- Build the versioned SQLite listing schema with provider-scoped stable source identities and observations, transaction type, separate integer sale yen and monthly rent yen, optional decimal areas, availability separate from editorial publication state, location precision/provenance, content hashes, and successful-check timestamps. Preserve Japanese originals, primary attribution and visibility decisions.
 - Save validated source observations and listing projections atomically. A retry after commit cannot duplicate offers. Missing money remains null; free is explicit zero. Partial payloads cannot clear known valid fields. Distinct sale/rental offers remain distinct. Only proven cross-source matches may share a property projection.
-- Operational tables and raw observations are private with RLS and restricted grants. Browsers receive approved listing projections through the local API. Imported records may appear locally without making them publicly published or changing editorial status.
+- Operational tables and source observations stay inside the worker-owned SQLite database. The sandboxed renderer receives only approved listing/job projections through a narrow context-isolated preload bridge. Validate operation arguments in the worker and sender/frame identity in the main process; expose no SQL, filesystem, generic IPC or privileged credentials. Local imports do not alter editorial publication decisions.
 - Confirmed configurable defaults: 24-hour complete-scan and individual listing-detail freshness; one request in flight per source host; minimum two-second source request interval unless stricter policy applies; 10 discovery-page requests and 100 detail requests per job across all sources, including retries. Budgets are configurable and exhaustion produces a partial outcome with Continue search when resumable. Synthetic tests exercise the same controls.
 - Reserve a configurable, documented share of detail-request capacity for stale known-offer refreshes when both new and refresh work are pending. When the job budget permits, each class receives capacity; release unused reserved capacity to the other class. Carry deferred refresh work across continuations and use oldest successful-check time first so repeated discovery cannot starve the same old offers. The allocation stays inside the existing total detail-request limit, including retries; manual-refresh rechecks use the refresh allocation.
 - Reuse complete cache coverage only for the same source set, filter semantics, and adapter versions. Geometric overlap is insufficient: require containment for full-area reuse, using geographic distances. Reuse candidate/detail work across partial overlaps without declaring unscanned areas complete. Attach to identical or fully covering in-flight work and prevent duplicate concurrent detail fetches.
@@ -70,15 +76,15 @@ Connect the selected map area to a local, persistent import service. Users expli
 
 ## Testing Decisions
 
-- Preserve the user-confirmed primary seam: job API with test Postgres and deterministic fixture adapters. Assert returned states, persisted results, coverage, and externally observed request counts; avoid queue implementation assertions.
-- Extend the map spec's browser journey to select an area, start a job, see running progress, reload/reconnect, and see saved pins/list results after completion. Exercise partial failure and cancellation at the API seam rather than multiplying UI tests.
-- Cover invalid radius without requests, repeated creation, cache containment versus overlap, version/source cache invalidation, failed scans not populating complete cache, retry budgets, restart after commit, expired leases, cancellation races, and no-enabled-source errors.
+- Preserve the user-confirmed primary seam: job API with temporary SQLite databases and deterministic fixture adapters. Assert returned states, persisted results, coverage, and externally observed request counts; avoid queue implementation assertions.
+- Extend the map spec's Electron renderer journey to select an area, start a job, see running progress, reload/reconnect, and see saved pins/list results after completion. Exercise partial failure and cancellation at the API seam rather than multiplying UI tests.
+- Cover invalid radius without requests, repeated creation, cache containment versus overlap, version/source cache invalidation, failed scans not populating complete cache, retry budgets, restart after commit, interrupted ownership, cancellation races, and no-enabled-source errors.
 - Verify manual refresh bypasses area/detail freshness without bypassing budgets or duplicating active work; queued jobs reuse newly completed work; cancellation never automatically resumes; and Continue search resumes cursors without prematurely completing coverage or advancing checkpoints. Verify older known offers refresh independently of early-stopped discovery, equal-date ties are retained, and a new area cannot reuse an unrelated checkpoint.
 - Verify invalid/expired progress restarts discovery within budget, retains saved data, and does not duplicate records or advance incomplete checkpoints. Verify mixed new/stale workloads exercise reserved capacity, unused capacity is reusable, and deferred oldest refreshes remain eligible across continuations.
 - Verify manual refresh joining an ordinary job that skipped recent details queues the missing rechecks, stays pending until its required work settles, reuses checks completed since its request, deduplicates repeated refreshes, and supports cancelling follow-up work without deleting saved results.
 - Verify saved results survive refresh failure, terminal messaging distinguishes empty success from failure and truncation, and explicit withdrawal changes default visibility while Show unavailable retains access.
-- Verify money semantics, coordinate uncertainty, preservation of moderation, and non-archival after scoped failures. Check browser database credentials cannot read operational records or write import data, and untrusted origins cannot mutate jobs.
-- No existing job-test precedent exists. Use a controlled clock and deterministic network substitutes; automated tests need no live bank or tile-provider requests.
+- Verify money semantics, coordinate uncertainty, preservation of moderation, and non-archival after scoped failures. Verify the preload exposes no operational-table reads or arbitrary writes, and untrusted frames cannot invoke job operations.
+- Extend the SQLite worker tests. Use a controlled clock and deterministic network substitutes; automated tests need no live bank or tile-provider requests.
 
 ## Out of Scope
 

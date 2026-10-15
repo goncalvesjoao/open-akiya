@@ -1,5 +1,11 @@
 # Persistent local import runtime and normalized listing storage
 
+## Desktop runtime
+
+Use Electron, React/TypeScript, a utility-process worker and worker-owned SQLite. Job operations cross a validated, context-isolated preload bridge; there is no local HTTP server. The renderer cannot access Node.js, SQL, source observations or arbitrary IPC. Closing the window keeps the application and imports running; reopening from the launcher restores the window. Explicit Quit stops scheduling and preserves committed work for recovery on restart. Cancelled work never resumes automatically. Sleep, shutdown and process crashes interrupt execution; no operating-system service or scheduling while fully exited is promised.
+
+The full acceptance requirements below remain targets. The desktop foundation implements basic synthetic create/list/inspect/cancel/results operations, exact-area active-job reuse and restart recovery. It does **not** complete freshness/containment policies, request-intent ownership, manual-refresh follow-ups, bounded continuation, rich job counters, all location variants, address lookup or live-source activation. See [desktop runtime](../desktop-runtime.md) for the implementation boundary. Keep these gaps explicit rather than weakening acceptance.
+
 Part of #3, under #1. Can start alongside #2 after area/listing contract alignment; no finished-map dependency. See the [implementation plan](../implementation-plan.md) for parallel start conditions and integration gates.
 
 ## Problem Statement
@@ -8,11 +14,11 @@ Users cannot run a persistent area import or safely retain results locally. Brow
 
 ## Solution
 
-Provide a local job API and worker that imports synthetic offers into local Supabase, reports durable job state, and supports cancellation and restart recovery. This is an independently verifiable API milestone before cache policies and UI integration.
+Provide a local job API and worker that imports synthetic offers into local SQLite, reports durable job state, and supports cancellation and restart recovery. This is an independently verifiable API milestone before cache policies and UI integration.
 
 ## User Stories
 
-1. As a local user, I want documented frontend, backend, and database startup, so that I can run the tool locally.
+1. As a local user, I want documented desktop installation and launch, so that I can run the tool locally.
 2. As a user, I want immediate acknowledgement, so that I know the request was accepted.
 3. As a user, I want discovery, fetching, and saving progress, so that I understand ongoing work.
 4. As a user, I want cancellation, so that unnecessary requests stop.
@@ -25,24 +31,24 @@ Provide a local job API and worker that imports synthetic offers into local Supa
 
 ## Implementation Decisions
 
-- Use local Supabase Postgres and a local TypeScript backend/worker, independent of browser lifetime. Document Docker/Supabase prerequisites and one startup command after prerequisites are installed. Keep privileged credentials server-side, bind to loopback, validate mutation requests, and restrict origins.
-- Add create, inspect, cancel, and area-results API operations. Create validates center coordinates and radius greater than zero and at most 10 km on the server, accepts an idempotency key, and immediately returns a persisted job ID or explicit cache/in-flight reuse outcome. Job input is immutable after creation.
+- Use Electron with a React/TypeScript renderer, a TypeScript utility-process worker and embedded SQLite in the per-user application data directory. Installed users launch one desktop application; no Docker, Supabase, database server or Node.js installation is required. Keep work independent of renderer reloads and window visibility.
+- Add create, inspect, cancel, and area-results API operations. Create validates center coordinates and radius greater than zero and at most 10 km in the worker, accepts an idempotency key, and immediately returns a persisted job ID or explicit cache/in-flight reuse outcome. Job input is immutable after creation.
 - Inspection exposes state, stage, timestamps, original area, meaningful counters, per-source outcomes, budget usage, and sanitized errors. States are queued, running, succeeded, partial, failed, and cancelled. Report counts rather than fabricated percentages. Persist enough UI context to reconnect to the job after reload; polling is sufficient.
-- Persist jobs, source tasks, checkpoints, coverage records, retry times, and leases. Claim jobs transactionally; reclaim expired leases on restart. Enforce one executing import per installation initially. Cancellation stops scheduling outbound work and preserves completed transactions; inspect and cancel are idempotent.
+- Persist jobs, source tasks, checkpoints, coverage records, retry times, and leases. Claim jobs transactionally under the single worker owner; recover interrupted running work on restart. Keep lease/ownership data if needed for future multiple workers. Enforce one executing import per installation initially. Cancellation stops scheduling outbound work and preserves completed transactions; inspect and cancel are idempotent.
 - Define adapter discovery/detail/normalization contracts and implement a synthetic adapter that can deterministically simulate pagination, changes, delays, failures, and cancellation. Label fixture mode clearly. The next spec supplies the first live implementation.
-- Extend the existing listing schema with provider-scoped stable source identities and observations, transaction type, separate integer sale yen and monthly rent yen, optional decimal areas, availability separate from editorial publication state, location precision/provenance, content hashes, and successful-check timestamps. Preserve current listing IDs, Japanese originals, primary attribution, and visibility decisions through additive migrations.
+- Build the versioned SQLite listing schema with provider-scoped stable source identities and observations, transaction type, separate integer sale yen and monthly rent yen, optional decimal areas, availability separate from editorial publication state, location precision/provenance, content hashes, and successful-check timestamps. Preserve Japanese originals, primary attribution and visibility decisions.
 - Save validated source observations and listing projections atomically. A retry after commit cannot duplicate offers. Missing money remains null; free is explicit zero. Partial payloads cannot clear known valid fields. Distinct sale/rental offers remain distinct. Only proven cross-source matches may share a property projection.
-- Operational tables and raw observations are private with RLS and restricted grants. Browsers receive approved listing projections through the local API. Imported records may appear locally without making them publicly published or changing editorial status.
+- Operational tables and source observations stay inside the worker-owned SQLite database. The sandboxed renderer receives only approved listing/job projections through a narrow context-isolated preload bridge. Validate operation arguments in the worker and sender/frame identity in the main process; expose no SQL, filesystem, generic IPC or privileged credentials. Local imports do not alter editorial publication decisions.
 - Hide explicitly unavailable offers from default results while retaining local history and Show unavailable. Preserve independent source observations so another current source can still support availability. Failed checks and scoped absence cannot hide a listing as withdrawn.
 - A scoped or failed job cannot establish global absence. Never withdraw listings solely because a request omits them. Show a configuration error rather than successful empty results when no source is enabled.
 - The base API exposes durable queued/running/terminal states, bounded execution, and a replaceable adapter boundary. Policy-sensitive manual refresh and continuation operations are completed by the next child; document the API contract so that extension does not require another runtime.
 
 ## Testing Decisions
 
-- Retain the user-confirmed job API seam with test Postgres and deterministic fixture adapters, plus the existing map browser journey where UI behavior is involved. Assert observable behavior, not implementation internals.
+- Retain the user-confirmed worker API seam with temporary SQLite databases and deterministic fixture adapters, plus the existing map Electron renderer journey where UI behavior is involved. Assert observable behavior, not implementation internals.
 - Reject invalid areas without outbound requests; repeated idempotency keys reuse the same job; prove one executor, queued cancellation, lease expiry, recovery after commit, and that cancellation never automatically resumes.
 - Verify normalized money, distinct offers, source uniqueness, private operational records, permitted local projections, explicit unavailable visibility, and preservation of moderation and valid data after malformed input.
-- The repository currently has no job test precedent. Introduce only necessary tooling and use controlled clocks/network responses; automated checks make no live bank requests.
+- Extend the SQLite worker tests and Electron end-to-end journey with only necessary tooling and use controlled clocks/network responses; automated checks make no live bank requests.
 
 ## Out of Scope
 
@@ -115,11 +121,11 @@ type AreaResults = {
 }
 ```
 
-Money is nonnegative safe-integer yen in JSON; reject unsafe values rather than round Postgres bigint. Null is unknown, zero is explicitly free. Areas are positive finite square metres or null. Preserve the existing `price_jpy` as sale price and `source_checked_at` as last successful check; map them to `salePriceJpy`/`sourceCheckedAt`, add rent separately, and preserve `id`, Japanese fields and primary source attribution. Keep existing `status = draft | published | archived` editorial semantics independent of availability; the approved local API projection is separate from the existing published-only anonymous database view. No moderation writes come from imports. Legacy coordinates without verification evidence become unverified. No translations, raw observations, content hashes, leases or credentials enter this response. Distinct sale/rental offers retain distinct identities; `both` is only for a source explicitly offering both under one offer identity.
+Money is nonnegative safe-integer yen in JSON; reject unsafe values rather than round SQLite integers. Null is unknown, zero is explicitly free. Areas are positive finite square metres or null. Use `salePriceJpy` and `sourceCheckedAt` for sale price and successful-check time, with rent stored separately. Keep existing `status = draft | published | archived` editorial semantics independent of availability; the approved renderer projection is separate from worker-private records. No moderation writes come from imports. Coordinates without verification evidence are unverified. No translations, raw observations, content hashes, leases or credentials enter this response. Distinct sale/rental offers retain distinct identities; `both` is only for a source explicitly offering both under one offer identity.
 
-`sourceRefs` is nonempty; URLs must pass HTTP(S) and source-host validation. Only proven duplicate offers share a projection. Per-source observations retain independent successful-check/availability evidence privately; the displayed check time must conservatively represent the supporting projection, never a failed attempt. Null legacy observation times remain unknown rather than being backfilled with migration time. Unknown fields cannot erase existing valid values. Municipality IDs are stable namespaced reference keys, not display names. A group with no documented representative point remains list-accessible without a fabricated marker.
+`sourceRefs` is nonempty; URLs must pass HTTP(S) and source-host validation. Only proven duplicate offers share a projection. Per-source observations retain independent successful-check/availability evidence privately; the displayed check time must conservatively represent the supporting projection, never a failed attempt. Unknown observation times remain null rather than being filled with the current time. Unknown fields cannot erase existing valid values. Municipality IDs are stable namespaced reference keys, not display names. A group with no documented representative point remains list-accessible without a fabricated marker.
 
-Concrete synthetic results response (POST `/api/area-results`, input in #2):
+Concrete synthetic results response (`areaResults(query)`, input in #2):
 
 ```json
 {
@@ -177,17 +183,17 @@ Location fixture substitutions use the same listing shape: verified `{"kind":"ve
 
 ## Shared job API
 
-Use JSON under `/api`; no browser database writes. Mutation endpoints require allowed Origin plus a per-installation session/CSRF validation mechanism; reject untrusted/missing browser authorization with 403. Exact local credential provisioning belongs to #5 implementation. Browser receives no privileged database secret. All operations are local and polling-compatible.
+Use structured-clone-safe JSON-shaped messages through named preload operations. Main validates the owning WebContents, main frame and exact application URL; the worker validates every argument. Reject unauthorized senders. No loopback listener, HTTP authorization, CSRF mechanism or browser database credential is required. All operations are local and polling-compatible. The table and rich DTOs below are the target API; the foundation subset in `src/shared/desktop.ts` must be extended before these milestones can close.
 
-| Operation                                     | Request                                          | Response                                                                    |
-| --------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------- |
-| POST `/api/import-requests`                   | `{area, intent: 'import'}` and `Idempotency-Key` | 202 `ImportRequest`; 200 for cached reuse                                   |
-| GET `/api/import-requests/:requestId`         | none                                             | 200 `ImportRequest`                                                         |
-| GET `/api/import-jobs/:jobId`                 | none                                             | 200 `ImportJob`                                                             |
-| GET `/api/import-jobs?state=active`           | none                                             | 200 `{jobs: ImportJob[]}` including queued and running, oldest queued first |
-| POST `/api/import-jobs/:jobId/cancel`         | `{}`                                             | 200 current `ImportJob`                                                     |
-| POST `/api/import-requests/:requestId/cancel` | `{}`                                             | 200 current `ImportRequest`; #6 defines shared-work cancellation            |
-| POST `/api/area-results`                      | #2 `AreaQuery`                                   | 200 `AreaResults`; read-only, no source requests                            |
+| Operation                         | Request                                         | Response                                                                           |
+| --------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `createImportRequest(input)`      | `{area, intent: 'import'}` and `idempotencyKey` | Promise of `ImportRequest` including disposition                                   |
+| `inspectImportRequest(requestId)` | none                                            | Promise of `ImportRequest`                                                         |
+| `inspectImport(jobId)`            | none                                            | Promise of `ImportJob`                                                             |
+| `listImports({state: "active"})`  | none                                            | Promise of `{jobs: ImportJob[]}` including queued and running, oldest queued first |
+| `cancelImport(jobId)`             | `{}`                                            | Promise of current `ImportJob`                                                     |
+| `cancelImportRequest(requestId)`  | `{}`                                            | Promise of current `ImportRequest`; #6 defines shared-work cancellation            |
+| `areaResults(query)`              | #2 `AreaQuery`                                  | Promise of `AreaResults`; read-only, no source requests                            |
 
 ```ts
 type JobState =
@@ -256,13 +262,13 @@ type ImportJob = {
 
 A request represents a user's intent; a job represents bounded shared execution. Base #5 creates one request and one job; #6 supplies attachment/cache/continuation semantics using these same fields. Freeze job area and scope at creation (enabled sources, adapter/query/reference versions and filters). `scopeKey` is an opaque durable fingerprint, not a client-supplied authority. Results always query the requested area, even when an attached job has a larger area. Default budgets are 10 discovery and 100 detail requests including retries; limits are persisted per job. Counts are nonnegative job-local values: unique discovered identities, successful detail checks, committed added/updated/unchanged projections and rejected observations. Retry attempts consume budget, not duplicate result counts. Counters never imply a known total; cumulative traversal coverage is separate from job-local counts.
 
-Request state aggregates intent and may move from running to queued while a required follow-up waits; it is not a job execution transition. Queued jobs can become running or cancelled; running ends in any terminal state. Terminal jobs never reopen. Cancellation sets `cancelRequestedAt`; a running job remains running until active work settles. Terminal cancellation preserves committed counts, and repeated cancellation returns the current terminal snapshot. Calling cancel on a completed job does not rewrite its outcome. All terminal stages are finished. No-enabled-source is 409 `NO_ENABLED_SOURCES`, never an empty successful job. Unknown identifiers are 404; malformed area/input is 400 `INVALID_REQUEST`; reused key with different semantic input is 409 `IDEMPOTENCY_CONFLICT`. Errors use `{"error":{"code":"INVALID_REQUEST","message":"radiusKm must be greater than 0 and at most 10","retryable":false}}`. Persist idempotency mappings with requests; retries return the same request and do not schedule new work. Do not use coordinate rounding to equate different inputs.
+Request state aggregates intent and may move from running to queued while a required follow-up waits; it is not a job execution transition. Queued jobs can become running or cancelled; running ends in any terminal state. Terminal jobs never reopen. Cancellation sets `cancelRequestedAt`; a running job remains running until active work settles. Terminal cancellation preserves committed counts, and repeated cancellation returns the current terminal snapshot. Calling cancel on a completed job does not rewrite its outcome. All terminal stages are finished. No-enabled-source rejects with `NO_ENABLED_SOURCES`, never an empty successful job. Unknown identifiers reject with `NOT_FOUND`; malformed area/input with `INVALID_REQUEST`; reused keys with different semantic input with `IDEMPOTENCY_CONFLICT`. Errors use `{"error":{"code":"INVALID_REQUEST","message":"radiusKm must be greater than 0 and at most 10","retryable":false}}`. Persist idempotency mappings with requests; retries return the same request and do not schedule new work. Do not use coordinate rounding to equate different inputs.
 
 Success means required work completed without source/record errors or deferred work; zero listings can succeed. Partial means useful work or saved resumable progress exists but required work is incomplete. Failed means required work could not produce useful progress; earlier saved area results remain available. Mixed source success/failure is partial. Coverage describes discovery traversal only: complete discovery plus deferred detail refresh can still mean a partial job. A terminal failed/cancelled/partial job cannot certify a new complete cache or advance a checkpoint. `lastSuccessfulCheckAt` is the last fully successful covering check, not this job's last attempt. Source caveats persist even on success.
 
 ### Concrete queued, running, empty, cancelled and failed examples
 
-POST `/api/import-requests`, `Idempotency-Key: sample-import-1`:
+`createImportRequest(input)`, `idempotencyKey: "sample-import-1"`:
 
 ```json
 {
@@ -288,7 +294,7 @@ POST `/api/import-requests`, `Idempotency-Key: sample-import-1`:
 }
 ```
 
-GET `/api/import-jobs/job-1`, 200 queued snapshot:
+`inspectImport("job-1")`, queued snapshot:
 
 ```json
 {
@@ -341,7 +347,7 @@ GET `/api/import-jobs/job-1`, 200 queued snapshot:
 }
 ```
 
-The following JSON objects are explicit field replacements on that full snapshot to construct deterministic response fixtures (not HTTP PATCH responses). Unmentioned fields retain their base values; replace whole nested objects. All snapshots return HTTP 200:
+The following JSON objects are explicit field replacements on that full snapshot to construct deterministic response fixtures (not mutation responses). Unmentioned fields retain their base values; replace whole nested objects. All inspections resolve their current snapshot:
 
 ```json
 {
@@ -399,7 +405,7 @@ Empty success after one empty discovery page:
 
 The corresponding area-results response is `{"area":{"center":{"latitude":35,"longitude":135},"radiusKm":5},"showUnavailable":false,"mode":"synthetic","listings":[],"municipalityGroups":[],"coverage":{"status":"complete","lastSuccessfulCheckAt":"2026-10-15T00:00:03Z","freshUntil":"2026-10-16T00:00:03Z","scopeKey":"fixture-scope-v1","caveats":["Configured source coverage only"]},"generatedAt":"2026-10-15T00:00:03Z"}`. The request becomes succeeded with that finished time. UI says Search finished, zero additions; it does not claim exhaustive inventory.
 
-POST `/api/import-jobs/job-1/cancel` `{}` before execution returns:
+`cancelImport("job-1")` before execution returns:
 
 ```json
 {
@@ -458,7 +464,7 @@ Cancel and failure propagate to the sole base request with the same terminal tim
 
 ## Internal source-adapter contract
 
-The worker owns persistence, retries, cancellation, budgets and transport. Adapters do not create independent queues or bypass the supplied transport. This supersedes the nightly-plan scheduling suggestions while reusing its stable identities, money, availability and observation/projection separation.
+The worker owns persistence, retries, cancellation, budgets and transport. Adapters do not create independent queues or bypass the supplied transport. Preserve stable identities, money semantics, availability and observation/projection separation.
 
 ```ts
 type AdapterCapabilities = {
