@@ -24,26 +24,32 @@ test('explores synthetic listings through keyboard selection, map pins and share
     page.getByRole('heading', { name: 'Synthetic map', exact: true }),
   ).toBeVisible()
   await page
-    .getByRole('button', { name: 'Pin: サンプル賃貸情報', exact: true })
+    .getByRole('button', { name: 'Pin: Sample rental listing', exact: true })
     .click()
   await expect(
     page.getByRole('region', { name: 'Listing details' }),
   ).toContainText('¥35,000 / month')
   await page
-    .getByRole('button', { name: 'サンプル売却情報', exact: true })
+    .getByRole('button', { name: 'Sample sale listing', exact: true })
     .click()
   await expect(
     page.getByRole('region', { name: 'Listing details' }),
   ).toContainText('Sale: Free (¥0)')
   await expect(
-    page.getByRole('button', { name: 'サンプル売却情報', exact: true }),
+    page.getByRole('button', { name: 'Sample sale listing', exact: true }),
   ).toHaveAttribute('aria-pressed', 'true')
   await page.getByLabel('Show unavailable').check()
   await expect(
-    page.getByRole('button', { name: '募集終了のサンプル', exact: true }),
+    page.getByRole('button', {
+      name: 'Unavailable sample listing',
+      exact: true,
+    }),
   ).toBeVisible()
   await expect(
-    page.getByRole('button', { name: 'Pin: 募集終了のサンプル', exact: true }),
+    page.getByRole('button', {
+      name: 'Pin: Unavailable sample listing',
+      exact: true,
+    }),
   ).toBeVisible()
   await page.getByLabel('Radius (km)').fill('11')
   await page.getByRole('button', { name: 'Apply area' }).click()
@@ -52,13 +58,16 @@ test('explores synthetic listings through keyboard selection, map pins and share
   await page.getByLabel('Radius (km)').fill('0.05')
   await page.getByRole('button', { name: 'Apply area' }).click()
   await expect(
-    page.getByRole('button', { name: '価格未定のサンプル', exact: true }),
+    page.getByRole('button', {
+      name: 'Sample listing with unknown price',
+      exact: true,
+    }),
   ).toHaveCount(0)
   await page.getByLabel('Latitude').fill('0')
   await page.getByLabel('Longitude').fill('0')
   await page.getByRole('button', { name: 'Apply area' }).click()
   await expect(
-    page.getByRole('button', { name: '境界サンプル', exact: true }),
+    page.getByRole('button', { name: 'Boundary sample listing', exact: true }),
   ).toBeVisible()
   expect(collection).toEqual([])
 })
@@ -101,7 +110,7 @@ test('supports pointer area selection, pan and zoom, mobile results and controll
   await page.getByLabel('Longitude', { exact: true }).fill('135')
   await page.getByRole('button', { name: 'Apply area' }).click()
   await page
-    .getByRole('button', { name: 'サンプル売却情報', exact: true })
+    .getByRole('button', { name: 'Sample sale listing', exact: true })
     .click()
   const popupPromise = page.waitForEvent('popup')
   await page.getByRole('link', { name: 'Original source' }).click()

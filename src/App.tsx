@@ -124,7 +124,7 @@ export default function App() {
           <div className="hero-art">
             <Landscape />
             <div className="art-label">
-              <span>空き家</span>
+              <span>Akiya</span>
               <div>
                 Akiya <span>/ vacant home</span>
               </div>

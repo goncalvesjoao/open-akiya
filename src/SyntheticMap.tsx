@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
+import { listingTitle } from './listings/presentation'
 import 'leaflet/dist/leaflet.css'
 import type {
   AreaResults,
@@ -25,10 +26,10 @@ function money(value: number | null) {
 function ListingDetails({ listing }: { listing: ListingProjection }) {
   return (
     <section aria-label="Listing details" className="listing-details">
-      <h3 lang="ja">{listing.titleJa}</h3>
+      <h3>{listingTitle(listing)}</h3>
       <p>
         Offer: {listing.id} · {listing.transactionType} · Availability:{' '}
-        {listing.availability}
+        {listing.availability.replaceAll('_', ' ')}
       </p>
       {(listing.transactionType === 'sale' ||
         listing.transactionType === 'both') && (
@@ -42,7 +43,11 @@ function ListingDetails({ listing }: { listing: ListingProjection }) {
         Last successful check:{' '}
         <time>{listing.sourceCheckedAt ?? 'Unknown'}</time>
       </p>
-      {listing.priceNoteJa && <p lang="ja">{listing.priceNoteJa}</p>}
+      <details>
+        <summary>Original Japanese source text</summary>
+        <p lang="ja">{listing.titleJa}</p>
+        {listing.priceNoteJa && <p lang="ja">{listing.priceNoteJa}</p>}
+      </details>
       {listing.sourceRefs.map((source) => {
         const url = safeSourceUrl(source.sourceId, source.url)
         return (
@@ -129,7 +134,7 @@ function MapCanvas({
       button.type = 'button'
       button.className = 'listing-pin'
       button.textContent = listing.transactionType === 'rent' ? 'R' : 'S'
-      button.setAttribute('aria-label', `Pin: ${listing.titleJa}`)
+      button.setAttribute('aria-label', `Pin: ${listingTitle(listing)}`)
       button.setAttribute('aria-pressed', String(listing.id === selectedId))
       L.DomEvent.disableClickPropagation(button)
       button.addEventListener('click', () => onSelect(listing.id))
@@ -305,9 +310,8 @@ export default function SyntheticMap() {
                 <button
                   aria-pressed={selectedId === listing.id}
                   onClick={() => setSelectedId(listing.id)}
-                  lang="ja"
                 >
-                  {listing.titleJa}
+                  {listingTitle(listing)}
                 </button>
                 {listing.location.kind === 'verified' && (
                   <span>

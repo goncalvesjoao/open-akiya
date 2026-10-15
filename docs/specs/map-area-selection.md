@@ -34,6 +34,8 @@ Provide a responsive map and companion results list using clearly labeled synthe
 
 ## Implementation Decisions
 
+- Use English for the current interface, including navigation, controls, statuses, accessible names and synthetic listing display titles. English and Japanese may become interface locales later; no locale selector or Japanese interface is required now. Keep original Japanese source fields unchanged and available in a separately labeled, initially collapsed original-source section. Authored English synthetic fixture labels are presentation text, not translations of real source content. Do not change the shared listing DTO or introduce automatic translation.
+
 - Build on the existing React/TypeScript app and retain a clear route or navigation back to project information. No backend is required for this milestone.
 - Choose a map library and tile provider during implementation; document attribution, configuration, network requirements, and any required user key. Locally running does not mean offline tiles. Do not require browser geolocation.
 - Represent the selected area with center latitude/longitude and radius in kilometres; validate finite coordinates and a radius greater than zero and at most 10. Provide pointer selection and labeled keyboard-operable coordinate/radius controls.
