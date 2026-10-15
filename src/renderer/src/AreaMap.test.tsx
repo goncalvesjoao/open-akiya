@@ -7,7 +7,7 @@ import {
 } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import AreaMap from './AreaMap'
-import { municipalityFixtures } from '../../main/fixtures'
+import { fixtures, municipalityFixtures } from '../../main/fixtures'
 import { initialArea } from '../../shared/geography'
 import type { AreaResults } from '../../shared/listings'
 
@@ -79,4 +79,139 @@ test('keeps municipality offers in expandable groups without duplicate rows or f
     ),
   ).toHaveLength(1)
   expect(within(group).queryByText(/\d+\.\d+ km/)).toBeNull()
+})
+
+function savedResults(
+  coverage: Partial<AreaResults['coverage']> = {},
+): AreaResults {
+  return {
+    area: initialArea,
+    showUnavailable: false,
+    mode: 'synthetic',
+    listings: [fixtures[0]],
+    municipalityGroups: [],
+    coverage: {
+      status: 'unknown',
+      lastSuccessfulCheckAt: null,
+      freshUntil: null,
+      scopeKey: null,
+      caveats: [],
+      ...coverage,
+    },
+    generatedAt: '2026-10-15T00:00:00Z',
+  }
+}
+
+test('retries rejected queries without changing the accepted selection', async () => {
+  const result = savedResults()
+  const query = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('offline'))
+    .mockResolvedValue(result)
+  Object.defineProperty(window, 'openAkiya', {
+    configurable: true,
+    value: { areaResults: query, listImports: () => new Promise(() => {}) },
+  })
+  render(<AreaMap />)
+  expect(await screen.findByText(/Listing query failed/)).toBeVisible()
+  fireEvent.click(screen.getByRole('button', { name: 'Retry listing query' }))
+  expect(await screen.findByText(/1 synthetic listings/)).toBeVisible()
+  expect(screen.getByText('Selected: 35, 135 · 5 km')).toBeVisible()
+})
+
+test('hides previous-area results while loading and ignores late responses after a newer empty result', async () => {
+  const result = savedResults()
+  let resolveOlder!: (value: AreaResults) => void
+  const query = vi
+    .fn()
+    .mockResolvedValueOnce(result)
+    .mockImplementationOnce(
+      () =>
+        new Promise<AreaResults>((resolve) => {
+          resolveOlder = resolve
+        }),
+    )
+    .mockImplementationOnce(async (input) => ({
+      ...result,
+      ...input,
+      listings: [],
+    }))
+  Object.defineProperty(window, 'openAkiya', {
+    configurable: true,
+    value: { areaResults: query, listImports: () => new Promise(() => {}) },
+  })
+  render(<AreaMap />)
+  await screen.findByText(/1 synthetic listings/)
+  fireEvent.change(screen.getByLabelText('Latitude'), {
+    target: { value: '34' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Apply area' }))
+  expect(screen.getByText('Loading listings…')).toBeVisible()
+  expect(
+    within(screen.getByRole('list', { name: 'Listing results' })).queryByRole(
+      'button',
+    ),
+  ).toBeNull()
+  fireEvent.change(screen.getByLabelText('Latitude'), {
+    target: { value: '33' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Apply area' }))
+  await screen.findByText(/No listings in this selected area/)
+  const { act } = await import('@testing-library/react')
+  await act(async () =>
+    resolveOlder({
+      ...result,
+      area: { ...initialArea, center: { latitude: 34, longitude: 135 } },
+    }),
+  )
+  expect(screen.getByText('Selected: 33, 135 · 5 km')).toBeVisible()
+  expect(screen.getByText(/No listings in this selected area/)).toBeVisible()
+  expect(
+    within(screen.getByRole('list', { name: 'Listing results' })).queryByRole(
+      'button',
+    ),
+  ).toBeNull()
+})
+
+test('keeps selected details and truthful coverage when refreshing saved results fails', async () => {
+  const result = savedResults({
+    status: 'partial',
+    lastSuccessfulCheckAt: '2026-10-14T00:00:00Z',
+    caveats: ['Configured synthetic sources only'],
+  })
+  let refresh!: () => void
+  const query = vi
+    .fn()
+    .mockResolvedValueOnce(result)
+    .mockRejectedValue(new Error('offline'))
+  Object.defineProperty(window, 'openAkiya', {
+    configurable: true,
+    value: {
+      areaResults: query,
+      listImports: () =>
+        new Promise((resolve) => {
+          refresh = () => resolve({ jobs: [] })
+        }),
+    },
+  })
+  render(<AreaMap />)
+  await screen.findByText(/1 synthetic listings/)
+  fireEvent.click(
+    within(screen.getByRole('list', { name: 'Listing results' })).getByRole(
+      'button',
+    ),
+  )
+  const before = screen.getByRole('region', {
+    name: 'Listing details',
+  }).textContent
+  const { act } = await import('@testing-library/react')
+  await act(async () => refresh())
+  expect(await screen.findByText(/Listing query failed/)).toBeVisible()
+  expect(
+    screen.getByRole('region', { name: 'Listing details' }).textContent,
+  ).toBe(before)
+  expect(screen.getByText(/Coverage partial/)).toHaveTextContent(
+    '2026-10-14T00:00:00Z',
+  )
+  expect(screen.getByText('Configured synthetic sources only')).toBeVisible()
 })

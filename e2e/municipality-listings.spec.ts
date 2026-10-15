@@ -31,6 +31,13 @@ test('explores municipality summary markers and list-only groups without house p
     })
     await expect(pin).toHaveCSS('border-radius', '5px')
     await expect(pin).toHaveCSS('background-color', 'rgb(99, 66, 124)')
+    // Saved offers can appear before the import finishes. Wait for its final
+    // query refresh before checking draft edits: that refresh legitimately
+    // replaces marker data and is independent of editing coordinate drafts.
+    await expect(
+      page.getByRole('list', { name: 'Import queue' }).getByRole('listitem'),
+    ).toHaveCount(0)
+    await expect(page.getByText('Loading listings…')).toHaveCount(0)
     // Draft edits must preserve real Leaflet markers for subsequent keyboard activation.
     const marker = await pin.elementHandle()
     await pin.focus()
