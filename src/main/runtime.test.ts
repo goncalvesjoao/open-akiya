@@ -309,3 +309,42 @@ test('adapter evidence and unapproved fields never enter saved listing projectio
   expect(listing.sourceRefs[0]).not.toHaveProperty('secret')
   expect(listing.location).not.toHaveProperty('secret')
 })
+
+test.each(['floorAreaM2', 'landAreaM2'] as const)(
+  'rejects zero %s without saving the observation or listing',
+  async (field) => {
+    const base = syntheticAdapter(1)
+    let area = 0
+    const adapter: SourceAdapter = {
+      ...base,
+      normalize(evidence) {
+        const result = base.normalize(evidence)
+        if (result.kind === 'accepted') result.observation.fields[field] = area
+        return result
+      },
+    }
+    const runtime = open(`zero-${field}.sqlite`, 1, [adapter])
+    const rejected = runtime.createRequest(input)
+    await expect
+      .poll(() => runtime.inspect(rejected.jobIds[0]).state)
+      .toBe('failed')
+    expect(runtime.inspect(rejected.jobIds[0])).toMatchObject({
+      counts: { checked: 0, added: 0, updated: 0, unchanged: 0 },
+      error: { code: 'INVALID_REQUEST' },
+    })
+    expect(runtime.results(query).listings).toEqual([])
+    await runtime.close()
+    // Reuse the same content hash: an accidentally persisted observation would
+    // misclassify this first valid import as unchanged rather than newly added.
+    area = 25.5
+    const reopened = open(`zero-${field}.sqlite`, 1, [adapter])
+    const accepted = reopened.createRequest({
+      ...input,
+      idempotencyKey: 'valid',
+    })
+    expect(await completed(reopened, accepted.jobIds[0])).toMatchObject({
+      counts: { added: 1, updated: 0, unchanged: 0 },
+    })
+    expect(reopened.results(query).listings[0][field]).toBe(25.5)
+  },
+)

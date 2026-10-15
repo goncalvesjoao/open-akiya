@@ -66,7 +66,7 @@ export function listingProjection(value: ListingProjection): ListingProjection {
     if (amount !== null && (!Number.isSafeInteger(amount) || amount < 0))
       invalid('Invalid source money')
   for (const area of [value.floorAreaM2, value.landAreaM2])
-    if (area !== null && (!Number.isFinite(area) || area < 0))
+    if (area !== null && (!Number.isFinite(area) || area <= 0))
       invalid('Invalid source floor or land area')
   return {
     id: value.id,

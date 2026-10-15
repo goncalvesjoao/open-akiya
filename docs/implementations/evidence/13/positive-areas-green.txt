@@ -1,0 +1,9 @@
+
+ RUN  v5.0.4 /tmp/open-akiya-fix13
+
+
+ Test Files  1 passed (1)
+      Tests  2 passed | 8 skipped (10)
+   Start at  23:32:03
+   Duration  585ms (tests 49%, setup 27%, transform 19%, import 4%, worker 1%)
+
