@@ -25,7 +25,7 @@ npm run dev
 
 ```sh
 npm test              # SQLite worker/domain tests and React UI tests
-npm run test:e2e      # Reserved integrated journey command (no e2e cases yet)
+npm run test:e2e      # Electron selected-area import, reload and relaunch journey
 npm run lint
 npm run format:check
 npm run build         # Type checks and renderer/main/preload/worker bundles
@@ -34,7 +34,7 @@ npm run package       # Build an unpacked application in release/
 npm run dist          # Build the platform installer (Linux AppImage by default)
 ```
 
-The integrated Electron journey remains assigned to #7; the current checkout has no `e2e/` cases, so `test:e2e` reports no tests. Worker tests isolate data in temporary SQLite databases and use deterministic synthetic adapters without live source requests. Installer production/signing and Windows/macOS validation remain release work.
+The minimal integrated Electron journey covers selected-area import, sandboxed preload access, reload and persisted results after relaunch. It requires a graphical session, uses isolated temporary application data and blocks external HTTPS requests. Worker tests use temporary SQLite databases and deterministic synthetic adapters without live source requests. Broader UI acceptance remains assigned to #7. Installer production/signing and Windows/macOS validation remain release work.
 
 ## Local data and background imports
 
@@ -51,7 +51,7 @@ Saved listing queries make no collection requests. Map tiles use the OpenStreetM
 - `src/renderer/` — React interface, HTML, styles and UI tests.
 - `src/shared/` — process-neutral contracts and geographic validation.
 - `out/` — generated main, preload and renderer bundles.
-- `playwright.config.ts` — reserved integrated Electron journey configuration.
+- `e2e/` — minimal integrated Electron selected-area import journey.
 - `docs/` — active specifications, decisions, research and implementation plan.
 
 See the [desktop runtime](docs/desktop-runtime.md) for the current architecture and remaining requirements.
