@@ -29,12 +29,16 @@ VITE_SUPABASE_PUBLISHABLE_KEY=your-publishable-key
 Only public browser credentials belong in `VITE_` variables. Never use a secret or service-role key here. See [Supabase setup](supabase/README.md) for applying the database migration. The optional client lives in `src/lib/supabase.ts` and is `null` until both variables are configured.
 
 ```sh
-npm run lint       # ESLint
-npm run format     # Format with Prettier
+npm test             # Run tests once
+npm run test:watch   # Re-run tests as files change
+npm run lint         # ESLint
+npm run format       # Format with Prettier
 npm run format:check # Check Prettier formatting
-npm run build      # TypeScript checks and production build
-npm run preview    # Serve the production build locally
+npm run build        # TypeScript checks and production build
+npm run preview      # Serve the production build locally
 ```
+
+Tests use Vitest with React Testing Library and jsdom. The first test renders the landing page and checks that its contribution link points to the project repository. Add tests alongside the code using `.test.ts` or `.test.tsx` filenames; shared test setup lives in `src/test/setup.ts`.
 
 The production output is `dist/`, suitable for static hosting. Set the Supabase environment variables before building if the deployment will use the backend. The landing page uses Google Fonts with system font fallbacks.
 
