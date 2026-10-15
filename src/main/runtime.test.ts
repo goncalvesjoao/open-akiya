@@ -414,3 +414,30 @@ test('an idle worker waits for a foreign lease to expire before recovering saved
     vi.useRealTimers()
   }
 })
+
+test('rejects new verified observations with blank verification evidence', async () => {
+  const base = syntheticAdapter(0)
+  const adapter: SourceAdapter = {
+    ...base,
+    normalize(evidence) {
+      const result = base.normalize(evidence)
+      if (
+        result.kind === 'accepted' &&
+        result.observation.fields.location?.kind === 'verified'
+      ) {
+        result.observation.fields.location.evidence = '   '
+      }
+      return result
+    },
+  }
+  const runtime = open('empty-location-evidence.sqlite', 0, [adapter])
+  const request = runtime.createRequest(input)
+  await expect
+    .poll(() => runtime.inspect(request.jobIds[0]).state)
+    .toBe('failed')
+  expect(runtime.inspect(request.jobIds[0])).toMatchObject({
+    counts: { added: 0, checked: 0 },
+    error: { code: 'INVALID_REQUEST' },
+  })
+  expect(runtime.results(query).listings).toEqual([])
+})
