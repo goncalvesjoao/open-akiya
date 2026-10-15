@@ -1,5 +1,5 @@
 import ImportControls from './ImportControls'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import L from 'leaflet'
 import { listingTitle, municipalityTitle } from './listings/presentation'
 import 'leaflet/dist/leaflet.css'
@@ -200,7 +200,7 @@ function MapCanvas({
       button.textContent = `M ${group.count}`
       button.setAttribute(
         'aria-label',
-        `Municipality summary: ${municipalityTitle(group.municipalityId)} · ${group.count} listings`,
+        `Municipality summary: ${municipalityTitle(group.municipalityId)} · ${group.count} ${group.count === 1 ? 'listing' : 'listings'}`,
       )
       button.setAttribute(
         'aria-pressed',
@@ -291,10 +291,10 @@ export default function AreaMap() {
   const listings = results?.listings ?? []
   const groups = results?.municipalityGroups ?? []
   const groupedIds = new Set(groups.flatMap((group) => group.listingIds))
-  function selectGroup(id: string) {
+  const selectGroup = useCallback((id: string) => {
     setExpandedGroup(id)
     document.getElementById(`municipality-${id}`)?.focus()
-  }
+  }, [])
   const selected = listings.find((listing) => listing.id === selectedId)
   return (
     <section

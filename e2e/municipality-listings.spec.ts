@@ -31,7 +31,20 @@ test('explores municipality summary markers and list-only groups without house p
     })
     await expect(pin).toHaveCSS('border-radius', '5px')
     await expect(pin).toHaveCSS('background-color', 'rgb(99, 66, 124)')
-    await pin.click()
+    // Draft edits must preserve real Leaflet markers for subsequent keyboard activation.
+    const marker = await pin.elementHandle()
+    await pin.focus()
+    await page.getByLabel('Latitude', { exact: true }).fill('35.01')
+    await expect
+      .poll(() => marker!.evaluate((element) => element.isConnected))
+      .toBe(true)
+    await pin.focus()
+    await expect(pin).toBeFocused()
+    await page.getByLabel('Latitude', { exact: true }).fill('35')
+    await expect
+      .poll(() => marker!.evaluate((element) => element.isConnected))
+      .toBe(true)
+    await pin.press('Enter')
     await expect(group.locator('summary').first()).toBeFocused()
     await expect(pin).toHaveAttribute('aria-pressed', 'true')
     await expect(group).toContainText(

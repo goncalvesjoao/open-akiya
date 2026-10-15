@@ -49,6 +49,11 @@ test('keeps municipality offers in expandable groups without duplicate rows or f
     },
   })
   render(<AreaMap />)
+  expect(
+    await screen.findByRole('button', {
+      name: 'Municipality summary: Sample municipality · 1 listing',
+    }),
+  ).toBeVisible()
   const group = await screen.findByRole('group', {
     name: 'Municipality summary: Sample municipality without a point',
   })
