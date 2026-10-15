@@ -1,7 +1,11 @@
 import { workerRequest, type TransportOptions } from './transport'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
-import { areasIntersect, isSelectedArea } from '../shared/geography'
+import {
+  areasIntersect,
+  distanceMetres,
+  isSelectedArea,
+} from '../shared/geography'
 import type {
   AreaResults,
   Coverage,
@@ -51,6 +55,7 @@ type Progress = {
   completed: string[]
   sourceSaved?: number
   visitedCursors?: string[]
+  oldestDetailCheckAt?: number
 }
 function usefulProgress(progress: Progress, errorCode?: string): boolean {
   return (
@@ -68,6 +73,10 @@ type RuntimeOptions = TransportOptions & {
   leaseMs?: number
   discoveryLimit?: number
   detailLimit?: number
+  areaFreshnessMs?: number
+  detailFreshnessMs?: number
+  referenceVersion?: string
+  fixedFilters?: Record<string, string | number | boolean>
 }
 
 // Worker API seam: all SQLite access and execution ownership remain outside renderer.
@@ -75,6 +84,10 @@ export class ImportRuntime {
   private db: DatabaseSync
   private readonly owner = randomUUID()
   private readonly adapters: SourceAdapter[]
+  private readonly areaFreshnessMs: number
+  private readonly detailFreshnessMs: number
+  private readonly referenceVersion: string
+  private readonly fixedFilters: Record<string, string | number | boolean>
   private readonly now: () => number
   private readonly leaseMs: number
   private readonly limits: { discoveryLimit: number; detailLimit: number }
@@ -97,6 +110,16 @@ export class ImportRuntime {
       )
     )
       invalid('Invalid import budget configuration')
+    this.areaFreshnessMs = options.areaFreshnessMs ?? 86400000
+    this.detailFreshnessMs = options.detailFreshnessMs ?? 86400000
+    if (
+      [this.areaFreshnessMs, this.detailFreshnessMs].some(
+        (value) => !Number.isFinite(value) || value < 0,
+      )
+    )
+      invalid('Invalid freshness configuration')
+    this.referenceVersion = options.referenceVersion ?? 'synthetic-v1'
+    this.fixedFilters = options.fixedFilters ?? { residential: true }
     this.transportOptions = options
     this.adapters = options.adapters ?? [syntheticAdapter(delayMs)]
     this.now = options.now ?? Date.now
@@ -167,6 +190,87 @@ export class ImportRuntime {
       throw new LocalApiError(404, 'NOT_FOUND', 'Import request not found')
     return JSON.parse(String(row.data))
   }
+  private semantics() {
+    return {
+      sources: this.adapters
+        .map((adapter) => adapter.capabilities)
+        .sort((a, b) => a.sourceId.localeCompare(b.sourceId)),
+      filters: Object.fromEntries(
+        Object.entries(this.fixedFilters).sort(([a], [b]) =>
+          a.localeCompare(b),
+        ),
+      ),
+      referenceVersion: this.referenceVersion,
+    }
+  }
+  private scope(area: SelectedArea) {
+    return { area, ...this.semantics() }
+  }
+  private detailScope(adapter: SourceAdapter) {
+    return JSON.stringify({
+      source: adapter.capabilities,
+      filters: this.semantics().filters,
+      referenceVersion: this.referenceVersion,
+    })
+  }
+  private covering(
+    area: SelectedArea,
+    freshOnly = false,
+    exclude?: string,
+    includeIncomplete = false,
+  ): ImportJob | undefined {
+    const semantics = this.semantics()
+    for (const row of this.db
+      .prepare(
+        `SELECT data,scope,progress FROM import_jobs_v2 WHERE state IN ('succeeded','partial','failed','cancelled') AND CASE WHEN json_valid(data) THEN json_extract(data,'$.coverage.status') IS NOT NULL ELSE 0 END ORDER BY rowid DESC`,
+      )
+      .all()) {
+      const job: ImportJob = JSON.parse(String(row.data))
+      const stored = JSON.parse(String(row.scope))
+      delete stored.area
+      if (
+        job.id === exclude ||
+        job.reasons.includes('CACHE_REUSED') ||
+        JSON.stringify(stored) !== JSON.stringify(semantics) ||
+        (!includeIncomplete &&
+          (job.state !== 'succeeded' ||
+            job.coverage.status !== 'complete' ||
+            !job.coverage.lastSuccessfulCheckAt)) ||
+        distanceMetres(area.center, job.area.center) + area.radiusKm * 1000 >
+          job.area.radiusKm * 1000 + 1e-8
+      )
+        continue
+      if (job.coverage.lastSuccessfulCheckAt && job.coverage.freshUntil) {
+        const progress: Progress = JSON.parse(String(row.progress))
+        const expires = Math.min(
+          Date.parse(job.coverage.freshUntil),
+          Date.parse(job.coverage.lastSuccessfulCheckAt) + this.areaFreshnessMs,
+          progress.oldestDetailCheckAt === undefined
+            ? Infinity
+            : progress.oldestDetailCheckAt + this.detailFreshnessMs,
+        )
+        job.coverage.freshUntil = new Date(expires).toISOString()
+      }
+      if (
+        freshOnly &&
+        (!job.coverage.freshUntil ||
+          this.now() >= Date.parse(job.coverage.freshUntil))
+      )
+        continue
+      return job
+    }
+  }
+  private resultsCoverage(area: SelectedArea): Coverage {
+    const successful = this.covering(area)
+    const latest = this.covering(area, false, undefined, true)
+    const evidence = successful?.coverage ?? latest?.coverage ?? coverage(null)
+    return {
+      ...evidence,
+      caveats: [
+        ...new Set([...evidence.caveats, ...(latest?.coverage.caveats ?? [])]),
+      ],
+    }
+  }
   private save(job: ImportJob) {
     // Another worker may have persisted cancellation after this snapshot was read.
     this.db
@@ -178,17 +282,17 @@ export class ImportRuntime {
         ELSE ? END WHERE id=?`,
       )
       .run(job.state, JSON.stringify(job), JSON.stringify(job), job.id)
-    const row = this.db
+    const rows = this.db
       .prepare('SELECT data FROM import_requests_v2 WHERE job_id=?')
-      .get(job.id)
-    if (row) {
+      .all(job.id)
+    for (const row of rows) {
       const request: ImportRequest = JSON.parse(String(row.data))
       request.state = job.state
       request.finishedAt = job.finishedAt
       request.error = job.error
       this.db
-        .prepare('UPDATE import_requests_v2 SET data=? WHERE job_id=?')
-        .run(JSON.stringify(request), job.id)
+        .prepare('UPDATE import_requests_v2 SET data=? WHERE id=?')
+        .run(JSON.stringify(request), request.id)
     }
   }
   createRequest(input: unknown): ImportRequest {
@@ -225,12 +329,26 @@ export class ImportRuntime {
       }
       if (!this.adapters.length)
         throw new LocalApiError(409, 'NO_ENABLED_SOURCES', 'No enabled sources')
-      const scope = JSON.stringify({
-        area,
-        sources: this.adapters.map((adapter) => adapter.capabilities),
-        filters: { residential: true },
-        referenceVersion: 'synthetic-v1',
-      })
+      const cached = this.covering(area, true)
+      if (cached) {
+        const request: ImportRequest = {
+          id: randomUUID(),
+          area,
+          intent: 'import',
+          state: 'succeeded',
+          disposition: 'cached',
+          jobIds: [cached.id],
+          pendingFollowUp: false,
+          createdAt: this.time(),
+          finishedAt: this.time(),
+          error: null,
+        }
+        this.db
+          .prepare('INSERT INTO import_requests_v2 VALUES (?,?,?,?,?)')
+          .run(request.id, key, semantic, cached.id, JSON.stringify(request))
+        return request
+      }
+      const scope = JSON.stringify(this.scope(area))
       const scopeKey = createHash('sha256').update(scope).digest('hex')
       const job: ImportJob = {
         id: randomUUID(),
@@ -382,7 +500,7 @@ export class ImportRuntime {
       mode: 'synthetic',
       listings: visible,
       municipalityGroups: [...groups.values()],
-      coverage: coverage(null),
+      coverage: this.resultsCoverage(area),
       generatedAt: this.time(),
     }
   }
@@ -521,6 +639,7 @@ export class ImportRuntime {
       !observation.contentHash ||
       typeof observation.sourceCheckedAt !== 'string' ||
       !Number.isFinite(Date.parse(observation.sourceCheckedAt)) ||
+      Date.parse(observation.sourceCheckedAt) > this.now() ||
       !record(observation.fields) ||
       !record(observation.provenance)
     )
@@ -706,6 +825,7 @@ export class ImportRuntime {
         candidate.transactionType,
         JSON.stringify({
           ...observation,
+          freshnessScope: this.detailScope(adapter),
           ...(saved?.confirmedDuplicateOf && !duplicate
             ? { confirmedDuplicateOf: saved.confirmedDuplicateOf }
             : {}),
@@ -834,8 +954,7 @@ export class ImportRuntime {
                 for (const candidate of progress.candidates) {
                   if (
                     candidate.externalId === externalId &&
-                    sourceId ===
-                      this.adapters[progress.sourceIndex]?.capabilities.sourceId
+                    sourceId === job.sources[progress.sourceIndex]?.sourceId
                   )
                     matches.push(
                       JSON.stringify([
@@ -851,11 +970,27 @@ export class ImportRuntime {
         ),
       ]
     }
+    if (progress.oldestDetailCheckAt === undefined) {
+      for (const identity of progress.completed) {
+        if (!identity.startsWith('[')) continue
+        const [sourceId, externalId, transactionType] = JSON.parse(identity)
+        const row = this.db
+          .prepare(
+            'SELECT data FROM offer_observations WHERE source_id=? AND external_id=? AND transaction_type=?',
+          )
+          .get(sourceId, externalId, transactionType)
+        if (!row) continue
+        const observation: SourceObservation = JSON.parse(String(row.data))
+        progress.oldestDetailCheckAt = Math.min(
+          progress.oldestDetailCheckAt ?? Infinity,
+          Date.parse(observation.sourceCheckedAt),
+        )
+      }
+    }
     // Completed also includes rejections. Recover useful work only from this
     // source's retained successful checks during the interrupted execution.
     if (progress.sourceSaved === undefined) {
-      const sourceId =
-        this.adapters[progress.sourceIndex]?.capabilities.sourceId
+      const sourceId = job.sources[progress.sourceIndex]?.sourceId
       progress.sourceSaved = progress.completed.filter((identity) => {
         if (!identity.startsWith('[')) return false
         const [completedSource, externalId, transactionType] =
@@ -918,15 +1053,42 @@ export class ImportRuntime {
         .prepare('SELECT scope,progress FROM import_jobs_v2 WHERE id=?')
         .get(job.id)!
       const frozen = JSON.parse(String(row.scope))
-      if (
-        JSON.stringify(frozen.sources) !==
-        JSON.stringify(this.adapters.map((adapter) => adapter.capabilities))
-      )
+      if (JSON.stringify(frozen) !== JSON.stringify(this.scope(job.area)))
         throw new LocalApiError(
           409,
           'CONFIGURATION_ERROR',
           'Saved source configuration is unavailable',
         )
+      const reused = this.covering(job.area, true, job.id)
+      if (
+        reused &&
+        job.budget.discoveryUsed === 0 &&
+        job.budget.detailUsed === 0
+      ) {
+        this.transaction(() => {
+          this.ensure(job)
+          job.state = 'succeeded'
+          job.stage = 'finished'
+          job.finishedAt = this.time()
+          job.coverage = reused.coverage
+          job.sources = reused.sources
+          job.reasons = ['CACHE_REUSED']
+          this.save(job)
+          for (const row of this.db
+            .prepare('SELECT data FROM import_requests_v2 WHERE job_id=?')
+            .all(job.id)) {
+            const request: ImportRequest = JSON.parse(String(row.data))
+            request.disposition = 'cached'
+            request.jobIds = [reused.id]
+            this.db
+              .prepare(
+                'UPDATE import_requests_v2 SET job_id=?,data=? WHERE id=?',
+              )
+              .run(reused.id, JSON.stringify(request), request.id)
+          }
+        })
+        return
+      }
       const progress: Progress = JSON.parse(String(row.progress))
       this.upgradeProgress(job, progress)
       job.counts.discovered = progress.discovered.length
@@ -937,8 +1099,10 @@ export class ImportRuntime {
         this.saveProgress(job, progress)
       })
       for (; progress.sourceIndex < this.adapters.length;) {
-        const adapter = this.adapters[progress.sourceIndex]
         const source = job.sources[progress.sourceIndex]
+        const adapter = this.adapters.find(
+          (adapter) => adapter.capabilities.sourceId === source.sourceId,
+        )!
         progress.sourceSaved ??= 0
         source.state = 'running'
         const context = this.context(job, adapter)
@@ -1032,6 +1196,54 @@ export class ImportRuntime {
                 this.saveProgress(job, progress)
                 continue
               }
+              const saved = this.db
+                .prepare(
+                  'SELECT data FROM offer_observations WHERE source_id=? AND external_id=? AND transaction_type=?',
+                )
+                .get(
+                  adapter.capabilities.sourceId,
+                  candidate.externalId,
+                  candidate.transactionType,
+                )
+              const observation = saved
+                ? JSON.parse(String(saved.data))
+                : undefined
+              const freshUntil = observation
+                ? Date.parse(observation.sourceCheckedAt) +
+                  this.detailFreshnessMs
+                : 0
+              if (
+                observation?.freshnessScope === this.detailScope(adapter) &&
+                this.now() < freshUntil
+              ) {
+                this.transaction(() => {
+                  this.ensure(job)
+                  const offer = this.db
+                    .prepare(
+                      'SELECT listing_id FROM offer_keys WHERE source_id=? AND external_id=? AND transaction_type=?',
+                    )
+                    .get(
+                      adapter.capabilities.sourceId,
+                      candidate.externalId,
+                      candidate.transactionType,
+                    )
+                  if (!offer) invalid('Successful detail has no saved listing')
+                  this.db
+                    .prepare(
+                      'INSERT OR IGNORE INTO listing_discovery_areas VALUES (?,?)',
+                    )
+                    .run(offer.listing_id!, JSON.stringify(job.area))
+                  progress.oldestDetailCheckAt = Math.min(
+                    progress.oldestDetailCheckAt ?? Infinity,
+                    Date.parse(observation.sourceCheckedAt),
+                  )
+                  progress.sourceSaved!++
+                  progress.completed.push(identity)
+                  progress.candidateIndex++
+                  this.saveProgress(job, progress)
+                })
+                continue
+              }
               job.stage = 'fetching'
               this.save(job)
               const evidence = await this.parse(() =>
@@ -1050,6 +1262,10 @@ export class ImportRuntime {
                 if (normalized.kind === 'accepted') {
                   try {
                     this.commit(job, normalized.observation, adapter, candidate)
+                    progress.oldestDetailCheckAt = Math.min(
+                      progress.oldestDetailCheckAt ?? Infinity,
+                      Date.parse(normalized.observation.sourceCheckedAt),
+                    )
                     progress.sourceSaved!++
                   } catch (error) {
                     if (
@@ -1094,7 +1310,14 @@ export class ImportRuntime {
             progress.exhausted && !progress.limitation && !source.error
               ? 'complete'
               : 'partial'
-          if (progress.limitation) job.reasons.push('SOURCE_LIMITATION')
+          if (progress.limitation) {
+            job.reasons.push('SOURCE_LIMITATION')
+            job.coverage.caveats.push(progress.limitation)
+          }
+          if (adapter.capabilities.geography === 'municipality')
+            job.coverage.caveats.push(
+              'Municipality source coverage may extend beyond the requested circle.',
+            )
         } catch (error) {
           this.ensure(job)
           Object.assign(job, this.inspect(job.id))
@@ -1110,6 +1333,9 @@ export class ImportRuntime {
           )
           const failedSource = job.sources[progress.sourceIndex]
           failedSource.error = safeError(error)
+          job.coverage.caveats.push(
+            `${adapter.capabilities.sourceId}: ${failedSource.error.message}`,
+          )
           failedSource.state = usefulProgress(progress, failedSource.error.code)
             ? 'partial'
             : 'failed'
@@ -1156,8 +1382,22 @@ export class ImportRuntime {
       )
         ? 'complete'
         : 'partial'
-      if (job.state === 'succeeded')
+      if (job.state === 'succeeded') {
         job.coverage.lastSuccessfulCheckAt = this.time()
+        job.coverage.freshUntil = new Date(
+          Math.min(
+            this.now() + this.areaFreshnessMs,
+            progress.oldestDetailCheckAt === undefined
+              ? Infinity
+              : progress.oldestDetailCheckAt + this.detailFreshnessMs,
+          ),
+        ).toISOString()
+      }
+      if (job.state !== 'succeeded')
+        job.coverage.caveats.push(
+          'Required import work is incomplete; saved results retained.',
+        )
+      job.coverage.caveats = [...new Set(job.coverage.caveats)]
       job.stage = 'finished'
       job.finishedAt = this.time()
       this.transaction(() => {
