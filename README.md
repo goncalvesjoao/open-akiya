@@ -17,7 +17,28 @@ npm install
 npm run dev
 ```
 
-For the persistent synthetic import API and worker, follow [local runtime setup](docs/local-import-runtime.md), then run `npm run dev:local`. This applies migrations through the pinned Supabase CLI, then starts the frontend, API and independent worker. No global CLI installation or `supabase init` is needed.
+For persistent synthetic imports, start Docker and set up the local Supabase stack. The pinned CLI and project configuration are included:
+
+```sh
+npx supabase start
+cp .env.example .env.local
+```
+
+In `.env.local`, set `DATABASE_URL` to the local connection URL with `?sslmode=disable`, and set `INSTALLATION_SESSION_TOKEN` to a random secret of at least 32 characters (`openssl rand -hex 32` generates one). Keep both server-only; never add a `VITE_` prefix.
+
+```sh
+npm run dev:local
+```
+
+Startup invokes Supabase CLI directly with the configured `DATABASE_URL`, then starts the frontend, API and independent worker. See [local runtime setup](docs/local-import-runtime.md) for the API journey and existing-database transition.
+
+To apply only migrations to the standard local Supabase stack, run `npm run db:migrate` (`supabase migration up --local`). This command targets that stack and does not read `.env.local`. For an alternate Postgres, export its connection URL in your shell and run the CLI explicitly:
+
+```sh
+npx supabase migration up --db-url "$DATABASE_URL"
+```
+
+Startup and database tests use their explicit database URLs; no application migration wrapper or ledger is involved.
 
 Open the local URL printed by Vite. The landing page runs without Supabase credentials.
 
@@ -33,6 +54,7 @@ Only public browser credentials belong in `VITE_` variables. Never use a secret 
 ```sh
 npm test             # Run tests once
 npm run test:watch   # Re-run tests as files change
+npm run test:server  # Isolated Postgres/API tests; requires TEST_DATABASE_URL
 npm run test:e2e     # Run Playwright tests in Chromium
 npm run test:e2e:ui  # Open Playwright's interactive test runner
 npm run lint         # ESLint

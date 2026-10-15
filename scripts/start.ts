@@ -15,10 +15,20 @@ const root = fileURLToPath(new URL('../', import.meta.url))
 const tsx = fileURLToPath(
   new URL('../node_modules/tsx/dist/cli.mjs', import.meta.url),
 )
-const migrate = spawn(process.execPath, [tsx, 'scripts/migrate.ts'], {
-  cwd: root,
-  stdio: 'inherit',
-})
+const migrate = spawn(
+  process.execPath,
+  [
+    'node_modules/supabase/dist/supabase.js',
+    'migration',
+    'up',
+    '--db-url',
+    process.env.DATABASE_URL,
+  ],
+  {
+    cwd: root,
+    stdio: 'inherit',
+  },
+)
 const migrated = await new Promise<number | null>((resolve, reject) => {
   migrate.once('error', reject)
   migrate.once('exit', resolve)

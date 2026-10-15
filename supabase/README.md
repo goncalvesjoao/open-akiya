@@ -2,7 +2,7 @@
 
 Supabase CLI owns schema migration execution and the `supabase_migrations.schema_migrations` history. The CLI is pinned in the npm development dependencies, and the local configuration is committed in `config.toml`.
 
-For local development, install Node.js and Docker, run `npm install`, then `npx supabase start`. Configure the server-only `DATABASE_URL` and installation session token as described in [local runtime setup](../docs/local-import-runtime.md). `npm run dev:local` applies pending migrations through the CLI and starts the application processes. `npm run db:migrate` applies only pending migrations to that configured database. These commands use an explicit database URL; they do not link or push to a hosted project.
+For local development, install Node.js and Docker, run `npm install`, then `npx supabase start`. Configure the server-only `DATABASE_URL` and installation session token as described in [local runtime setup](../docs/local-import-runtime.md). `npm run dev:local` applies pending migrations through the CLI and starts the application processes. `npm run db:migrate` directly runs `supabase migration up --local`, targeting the standard local Supabase stack without reading `.env.local`. For an alternate database, export its URL and run `npx supabase migration up --db-url "$DATABASE_URL"`; startup and the test harness also invoke the CLI directly with their configured URLs. No application migration wrapper or ledger is used.
 
 The first migration creates `public.listings`, preserving Japanese originals, source attribution, yen prices and editorial publication state. Null prices mean unknown, not free. The runtime migration adds normalized listing fields and private jobs, requests, observations and projections.
 

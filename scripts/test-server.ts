@@ -32,7 +32,13 @@ async function run(args: string[]) {
 try {
   // The generated name contains only ASCII letters, digits and underscores.
   await admin.query(`create database ${name}`)
-  await run(['--import', 'tsx', 'scripts/migrate.ts'])
+  await run([
+    'node_modules/supabase/dist/supabase.js',
+    'migration',
+    'up',
+    '--db-url',
+    url.href,
+  ])
   const testPool = new pg.Pool({ connectionString: url.href })
   try {
     const history = await testPool.query(
@@ -50,7 +56,13 @@ try {
     const saved = await testPool.query(
       "insert into public.listings(source_url,source_name,title_ja,prefecture,price_jpy,status) values('https://example.invalid/migration-preserved','Fixture','保持する元情報','京都府',0,'draft') returning id",
     )
-    await run(['--import', 'tsx', 'scripts/migrate.ts'])
+    await run([
+      'node_modules/supabase/dist/supabase.js',
+      'migration',
+      'up',
+      '--db-url',
+      url.href,
+    ])
     const retained = await testPool.query(
       'select title_ja,price_jpy,status,source_checked_at from public.listings where id=$1',
       [saved.rows[0].id],

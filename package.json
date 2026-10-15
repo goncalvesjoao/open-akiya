@@ -15,7 +15,7 @@
     "format:check": "prettier . --check",
     "preview": "vite preview",
     "dev:local": "node --env-file=.env.local --import tsx scripts/start.ts",
-    "db:migrate": "node --env-file=.env.local --import tsx scripts/migrate.ts",
+    "db:migrate": "supabase migration up --local",
     "test:server": "tsx scripts/test-server.ts"
   },
   "dependencies": {
