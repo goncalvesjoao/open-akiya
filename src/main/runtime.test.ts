@@ -328,10 +328,10 @@ test.each(['floorAreaM2', 'landAreaM2'] as const)(
     const rejected = runtime.createRequest(input)
     await expect
       .poll(() => runtime.inspect(rejected.jobIds[0]).state)
-      .toBe('failed')
+      .toBe('partial')
     expect(runtime.inspect(rejected.jobIds[0])).toMatchObject({
-      counts: { checked: 0, added: 0, updated: 0, unchanged: 0 },
-      error: { code: 'INVALID_REQUEST' },
+      counts: { checked: 1, rejected: 1, added: 0, updated: 0, unchanged: 0 },
+      sources: [{ error: { code: 'INVALID_REQUEST' } }],
     })
     expect(runtime.results(query).listings).toEqual([])
     await runtime.close()

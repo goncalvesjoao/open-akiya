@@ -81,6 +81,9 @@ export class ImportRuntime {
       CREATE TABLE IF NOT EXISTS executor_v2 (singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, external_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(source_id,external_id));
       CREATE TABLE IF NOT EXISTS listing_discovery_areas (listing_id TEXT NOT NULL REFERENCES listings(id), area TEXT NOT NULL, PRIMARY KEY(listing_id,area));
+      CREATE TABLE IF NOT EXISTS offer_keys (source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, listing_id TEXT NOT NULL REFERENCES listings(id), PRIMARY KEY(source_id,external_id,transaction_type));
+      INSERT OR IGNORE INTO offer_keys SELECT source_id, coalesce(json_extract(data,'$.sourceRefs[0].externalId'),external_id), json_extract(data,'$.transactionType'),id FROM listings;
+      CREATE TABLE IF NOT EXISTS offer_observations (source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id,external_id,transaction_type));
       CREATE TABLE IF NOT EXISTS observations (source_id TEXT NOT NULL, external_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(source_id,external_id));`)
     this.schedule()
   }
@@ -413,7 +416,7 @@ export class ImportRuntime {
         this.ensure(job)
         const url = new URL(value)
         if (
-          url.protocol !== 'https:' ||
+          !['https:', 'http:'].includes(url.protocol) ||
           url.username ||
           url.password ||
           !adapter.capabilities.allowedHosts.includes(url.hostname)
@@ -449,9 +452,27 @@ export class ImportRuntime {
       observation.identity.externalId !== candidate.externalId ||
       observation.url !== candidate.url ||
       !observation.contentHash ||
-      !Number.isFinite(Date.parse(observation.sourceCheckedAt))
+      typeof observation.sourceCheckedAt !== 'string' ||
+      !Number.isFinite(Date.parse(observation.sourceCheckedAt)) ||
+      !record(observation.fields) ||
+      !record(observation.provenance)
     )
       invalid('Invalid source observation')
+    identifier(observation.identity.externalId)
+    let url: URL
+    try {
+      url = new URL(observation.url)
+    } catch {
+      invalid('Invalid source URL')
+    }
+    if (
+      !['https:', 'http:'].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      !adapter.capabilities.allowedHosts.includes(url.hostname) ||
+      !['sale', 'rent', 'both', 'unknown'].includes(candidate.transactionType)
+    )
+      invalid('Invalid source offer identity')
     const fieldNames: (keyof NormalizedFields)[] = [
       'titleJa',
       'transactionType',
@@ -484,11 +505,38 @@ export class ImportRuntime {
     )
       invalid('Invalid source money')
     const prior = this.db
-      .prepare('SELECT data FROM listings WHERE source_id=? AND external_id=?')
-      .get(observation.identity.sourceId, observation.identity.externalId)
+      .prepare(
+        'SELECT listings.data FROM listings JOIN offer_keys ON listings.id=offer_keys.listing_id WHERE offer_keys.source_id=? AND offer_keys.external_id=? AND transaction_type=?',
+      )
+      .get(
+        observation.identity.sourceId,
+        observation.identity.externalId,
+        candidate.transactionType,
+      )
     const previous: ListingProjection | undefined = prior
       ? JSON.parse(String(prior.data))
       : undefined
+    const removalEvidence = (key: keyof NormalizedFields) =>
+      typeof observation.provenance[key] === 'string' &&
+      observation.provenance[key].trim().length > 0
+    for (const key of fieldNames) {
+      // Null is a removal only when the adapter supplies field-specific evidence.
+      if (previous && fields[key] === null && !removalEvidence(key))
+        delete fields[key]
+    }
+    if (previous && fields.availability === 'unknown')
+      delete fields.availability
+    if (
+      previous &&
+      fields.location?.kind === 'unknown' &&
+      !removalEvidence('location')
+    )
+      delete fields.location
+    if (
+      fields.transactionType !== undefined &&
+      fields.transactionType !== candidate.transactionType
+    )
+      invalid('Source offer transaction identity changed')
     const source = {
       sourceId: observation.identity.sourceId,
       externalId: observation.identity.externalId,
@@ -500,7 +548,7 @@ export class ImportRuntime {
       titleJa: '',
       sourceRefs: [source],
       primarySourceUrl: observation.url,
-      transactionType: 'unknown',
+      transactionType: candidate.transactionType,
       salePriceJpy: null,
       rentMonthlyJpy: null,
       priceNoteJa: null,
@@ -528,29 +576,51 @@ export class ImportRuntime {
       )
     )
       invalid('Invalid normalized listing')
-    const oldObservation = this.db
-      .prepare(
-        'SELECT data FROM observations WHERE source_id=? AND external_id=?',
-      )
-      .get(source.sourceId, source.externalId)
+    const businessFields = (value: ListingProjection) =>
+      JSON.stringify(fieldNames.map((key) => value[key]))
     const unchanged =
-      oldObservation &&
-      JSON.parse(String(oldObservation.data)).contentHash ===
-        observation.contentHash
+      previous && businessFields(previous) === businessFields(listing)
     this.db
       .prepare(
-        'INSERT INTO observations VALUES (?,?,?) ON CONFLICT(source_id,external_id) DO UPDATE SET data=excluded.data',
+        'INSERT INTO offer_observations VALUES (?,?,?,?) ON CONFLICT(source_id,external_id,transaction_type) DO UPDATE SET data=excluded.data',
       )
-      .run(source.sourceId, source.externalId, JSON.stringify(observation))
+      .run(
+        source.sourceId,
+        source.externalId,
+        candidate.transactionType,
+        JSON.stringify({
+          ...observation,
+          contentHash: createHash('sha256')
+            .update(businessFields(listing))
+            .digest('hex'),
+          fields: Object.fromEntries(
+            fieldNames.map((key) => [key, listing[key]]),
+          ),
+        }),
+      )
     this.db
       .prepare(
-        'INSERT INTO listings VALUES (?,?,?,?) ON CONFLICT(source_id,external_id) DO UPDATE SET data=excluded.data',
+        'INSERT INTO listings VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',
       )
       .run(
         listing.id,
         source.sourceId,
+        previous
+          ? String(
+              this.db
+                .prepare('SELECT external_id FROM listings WHERE id=?')
+                .get(previous.id)!.external_id,
+            )
+          : listing.id,
+        JSON.stringify({ ...previous, ...listing }),
+      )
+    this.db
+      .prepare('INSERT OR IGNORE INTO offer_keys VALUES (?,?,?,?)')
+      .run(
+        source.sourceId,
         source.externalId,
-        JSON.stringify(listing),
+        candidate.transactionType,
+        listing.id,
       )
     this.db
       .prepare('INSERT OR IGNORE INTO listing_discovery_areas VALUES (?,?)')
@@ -624,7 +694,11 @@ export class ImportRuntime {
             progress.exhausted = page.exhausted
             progress.limitation = page.limitation
             for (const candidate of page.candidates) {
-              const identity = `${adapter.capabilities.sourceId}:${candidate.externalId}`
+              const identity = JSON.stringify([
+                adapter.capabilities.sourceId,
+                candidate.externalId,
+                candidate.transactionType,
+              ])
               if (!progress.discovered.includes(identity))
                 progress.discovered.push(identity)
             }
@@ -634,7 +708,11 @@ export class ImportRuntime {
           for (; progress.candidateIndex < progress.candidates.length;) {
             this.ensure(job)
             const candidate = progress.candidates[progress.candidateIndex]
-            const identity = `${adapter.capabilities.sourceId}:${candidate.externalId}`
+            const identity = JSON.stringify([
+              adapter.capabilities.sourceId,
+              candidate.externalId,
+              candidate.transactionType,
+            ])
             if (
               candidate.relevance === 'known_outside' ||
               progress.completed.includes(identity)
@@ -653,9 +731,21 @@ export class ImportRuntime {
             this.transaction(() => {
               this.ensure(job)
               job.counts.checked++
-              if (normalized.kind === 'accepted')
-                this.commit(job, normalized.observation, adapter, candidate)
-              else {
+              if (normalized.kind === 'accepted') {
+                try {
+                  this.commit(job, normalized.observation, adapter, candidate)
+                } catch (error) {
+                  // Invalid source facts are a per-offer rejection. SQLite/storage
+                  // failures still escape and roll back the entire transaction.
+                  if (
+                    !(error instanceof LocalApiError) ||
+                    error.code !== 'INVALID_REQUEST'
+                  )
+                    throw error
+                  job.counts.rejected++
+                  source.error = safeError(error)
+                }
+              } else {
                 job.counts.rejected++
                 source.error = normalized.error
               }

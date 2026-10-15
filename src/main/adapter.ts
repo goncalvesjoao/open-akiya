@@ -65,6 +65,7 @@ export type SourceObservation = {
   adapterVersion: string
   sourceCheckedAt: string
   fields: Partial<NormalizedFields>
+  // A nonempty provenance[field] authoritatively establishes an explicit null removal.
   provenance: Record<string, string>
   contentHash: string
 }
@@ -164,7 +165,7 @@ export function syntheticAdapter(
         },
         url: candidate.url,
         fetchedAt: context.now(),
-        payload: listing,
+        payload: candidate,
         provenance: { fixture: 'Authored synthetic offer, not real inventory' },
       }
     },
@@ -172,7 +173,9 @@ export function syntheticAdapter(
       const listing =
         offers.find(
           (offer) =>
-            offer.sourceRefs[0].externalId === evidence.identity.externalId,
+            offer.sourceRefs[0].externalId === evidence.identity.externalId &&
+            offer.transactionType ===
+              (evidence.payload as Candidate).transactionType,
         ) ?? offers[0]
       const {
         titleJa,
