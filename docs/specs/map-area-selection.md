@@ -64,3 +64,30 @@ Provide a responsive map and companion results list using clearly labeled synthe
 ## Further Notes
 
 - This is the first deliverable under the confirmed parent spec. It is complete when the fixture-backed exploration flow works independently of source permissions or backend setup.
+
+## Shared selected-area and query contract
+
+Contract alignment, 2026-10-15. This section owns `SelectedArea`; #5 owns the listing projection and results envelope, and #6 owns coverage/freshness semantics. These are documentation contracts for implementation, not claims of implemented endpoints. Consumers reuse these definitions rather than introducing map-specific listing DTOs.
+
+```ts
+type Point = { latitude: number; longitude: number }
+type SelectedArea = { center: Point; radiusKm: number }
+type AreaQuery = { area: SelectedArea; showUnavailable: boolean }
+```
+
+Coordinates are WGS84 decimal degrees, latitude in [-90, 90], longitude in [-180, 180]; all numbers must be finite. Radius is kilometres, strictly positive and at most 10; no silent clamping. Reject numeric strings, nulls and missing members at the API. Invalid control drafts retain the last valid area. Server and client apply the same validation. Preserve the accepted coordinates/radius in job input; map movement cannot mutate it. Distances and circle containment use geodesic distance in metres internally, with boundary included; longitude wrapping must work across the antimeridian. No Japan-only coordinate restriction is implied by source support.
+
+Example query-boundary input (also the area-results POST body):
+
+```json
+{
+  "area": { "center": { "latitude": 35.0, "longitude": 135.0 }, "radiusKm": 5 },
+  "showUnavailable": false
+}
+```
+
+The replaceable boundary is `queryListings(query: AreaQuery): Promise<AreaResults>` using #5's response. Synthetic mode implements exactly this boundary without requiring a backend. Querying results reads saved data and never starts collection. Query errors reject distinctly from a successful empty response.
+
+Verified coordinates are filtered by inclusive circle membership. Unverified/approximate source points inside the circle are uncertain candidates, never verified membership. Municipality-only offers are included when their known municipality intersects the circle, regardless of the representative point. Unknown-location candidates require saved discovery evidence associating them with this area or an intersecting source query; do not return every unknown listing in the installation. A known precise outside point overrides broad query membership and is excluded. Municipality identity/intersection and representative-point provenance come from a documented reference or adapter evidence; absent evidence is unsupported coverage, not invented geography.
+
+Map fixtures consume #5's four location variants. Display `distanceKm` only for verified positions; for unverified pins an optional coordinate distance must be labeled approximate and must not replace the unknown true distance. Municipality summaries and unknown-location entries have no house distance. Apply Show unavailable before grouping/counting so a group count equals its visible listing IDs. Groups do not duplicate listings in the list. No location inference or geocoding is introduced.

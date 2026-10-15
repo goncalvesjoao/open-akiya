@@ -108,3 +108,7 @@ Nearby cached results and overlapping in-flight requests are reused. Geographic 
 - The design interview confirmed the 10 km limit, freshness and request-budget defaults, queue/continuation behavior, location model, and unchanged testing seams. Implementation must verify source-specific capabilities before enabling optimizations.
 - Source context: [MLIT national-bank overview](https://www.mlit.go.jp/totikensangyo/const/sosei_const_tk3_000131.html), [At Home terms](https://www.akiya-athome.jp/contents/index/?page=kiyaku), and [LIFULL terms](https://www.homes.co.jp/kiyaku/).
 - The repository uses GitHub Issues and the canonical triage-label vocabulary.
+
+## Shared contract ownership
+
+Concrete contract alignment lives in existing children: #2 owns selected area/query semantics, #5 owns listing/results, job API and source adapter definitions, #6 owns policy extensions and response scenarios, and #7/#4 consume them. These documentation contracts permit parallel synthetic map/backend and mock UI work; they do not claim runtime implementation or source authorization. The implementation plan retains the integration gates. No additional alignment ticket is needed.

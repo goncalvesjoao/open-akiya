@@ -51,3 +51,257 @@ Map UI integration and live source retrieval are separate milestones. Reuse the 
 ## Further Notes
 
 - Parent #3 retains the complete acceptance contract. This child owns the implementation decisions allocated here; completing it alone does not close #3. Existing map and live-source requirements remain in their respective specs.
+
+## Shared policy extensions and response examples
+
+Contract alignment, 2026-10-15. Extend #5's `ImportRequest`, `ImportJob`, `Coverage` and endpoints; do not introduce another API or DTO. Area input is owned by #2. This section specifies policy, not implemented behavior. All example times and source IDs are synthetic. Snapshot replacement objects below expand against #5's complete queued job example; these are fixture recipes for full GET responses, never PATCH responses.
+
+### Scope, freshness and bounded work
+
+`Coverage.status` is discovery coverage for the requested area under the stored source/query semantics. `complete` never means complete real-world inventory. Fresh cache reuse additionally requires successful required detail work, a covering completed job, and a nonexpired `freshUntil`. Both freshness defaults are 24 hours; exactly at expiry work is stale. A prior successful check may remain displayed during a later partial/failed refresh, but that failed attempt cannot extend freshness. Returned caveats explain unsupported geography, municipality breadth, incomplete discovery and source failures. Source failures cannot produce a new complete reusable area cache.
+
+Scope fingerprints include enabled source IDs, adapter/query versions, geographic reference version and fixed discovery filters. Show unavailable is a presentation filter and does not trigger collection or invalidate discovery. Full-area containment uses `distance(centers) + requestedRadius <= coveringRadius`; overlap alone is insufficient. Composite coverage needs evidence of full union coverage, so the initial implementation should prefer a single covering completed scope rather than infer coverage from bounding boxes. Re-evaluate reuse at queue execution time. Return requested area on the request/results, covering area on an attached job.
+
+Recommend a configurable default refresh reservation of 25% of the detail budget (25 of 100), with at least one slot per class when both are pending and the budget is at least two. Release unused capacity; retries count in the same class and total cap. A one-request budget alternates carried deferred classes across explicit continuations, retaining oldest-check ordering within refresh work. This is a technical scheduling default, not an increase to the agreed budget or a source-approved traffic policy. Deferred work is durable. Exhausting a bounded follow-up yields partial and requires explicit Continue search; do not spawn an endless chain of automatic bounded jobs.
+
+A completed discovery checkpoint is private `{sourceId, queryKey, adapterVersion, dateField, boundaryAt, overlapSeconds, completedAt}`. It can be used only for that covered query with verified descending semantics. Reprocess equality and the overlap window before stopping. Missing dates/order evidence disable the optimization; older-offer refresh remains independent. Advance only after required traversal work commits across continuations. Invalidating a cursor abandons that traversal; only a separately completed replacement can advance its checkpoint. Clients never supply checkpoint dates or adapter cursors.
+
+### Create, cache and attachment
+
+POST `/api/import-requests` accepts the #5 base body or `{area, intent:'manual_refresh'}`. Continuation accepts `{intent:'continue', fromJobId}` and derives area, source scope, pending refresh intent and cumulative progress from that job. Do not accept a replacement area with continuation. Each action supplies an idempotency key. A continuation from an active job is 409 `JOB_NOT_TERMINAL`; no saved or restartable work is 409 `NOT_CONTINUABLE`. Concurrent/retried continuations from the same progress generation reuse the already-created continuation rather than double-schedule it. Changed source semantics require safe restart of affected discovery with an explanation; unresolved/disabled source scope is a configuration failure rather than silently complete coverage.
+
+A cached ordinary import returns 200, for example:
+
+```json
+{
+  "id": "request-cache",
+  "area": { "center": { "latitude": 35, "longitude": 135 }, "radiusKm": 5 },
+  "intent": "import",
+  "state": "succeeded",
+  "disposition": "cached",
+  "jobIds": ["job-1"],
+  "pendingFollowUp": false,
+  "createdAt": "2026-10-15T01:00:00Z",
+  "finishedAt": "2026-10-15T01:00:00Z",
+  "error": null
+}
+```
+
+The linked succeeded job is the covering check; area-results exposes its actual check time. Manual refresh cannot use this disposition. An identical or fully covering running job instead returns 202 with `disposition:'attached'`, that job's ID and a queued/running request state. Partial overlap creates a queued job; reusable candidates/details are reconsidered when it starts. Recover by persisted request ID, then inspect its job IDs. Pending state is persisted server-side, not inferred from browser memory. No response claims manual completion just because the attached ordinary job finished.
+
+### Partial results and explicit continuation
+
+GET `/api/import-jobs/job-1` after discovery budget exhaustion returns #5's base snapshot with:
+
+```json
+{
+  "state": "partial",
+  "stage": "finished",
+  "startedAt": "2026-10-15T00:00:01Z",
+  "finishedAt": "2026-10-15T00:00:30Z",
+  "counts": {
+    "discovered": 3,
+    "checked": 2,
+    "added": 2,
+    "updated": 0,
+    "unchanged": 0,
+    "rejected": 0
+  },
+  "budget": {
+    "discoveryUsed": 10,
+    "discoveryLimit": 10,
+    "detailUsed": 2,
+    "detailLimit": 100
+  },
+  "sources": [
+    {
+      "sourceId": "fixture",
+      "state": "partial",
+      "coverage": "partial",
+      "error": null
+    }
+  ],
+  "coverage": {
+    "status": "partial",
+    "lastSuccessfulCheckAt": null,
+    "freshUntil": null,
+    "scopeKey": "fixture-scope-v1",
+    "caveats": ["Discovery budget exhausted; saved results retained"]
+  },
+  "reasons": ["DISCOVERY_BUDGET_EXHAUSTED"],
+  "continuation": {
+    "available": true,
+    "fromJobId": null,
+    "restarted": false,
+    "restartReason": null
+  }
+}
+```
+
+The associated request is partial with finishedAt `2026-10-15T00:00:30Z`. POST `/api/import-requests`, `Idempotency-Key: sample-continue-1`:
+
+```json
+{ "intent": "continue", "fromJobId": "job-1" }
+```
+
+202 response:
+
+```json
+{
+  "id": "request-2",
+  "area": { "center": { "latitude": 35, "longitude": 135 }, "radiusKm": 5 },
+  "intent": "continue",
+  "state": "queued",
+  "disposition": "continued",
+  "jobIds": ["job-2"],
+  "pendingFollowUp": false,
+  "createdAt": "2026-10-15T00:01:00Z",
+  "finishedAt": null,
+  "error": null
+}
+```
+
+GET `/api/import-jobs/job-2` uses the base queued snapshot with `id:'job-2'`, createdAt `2026-10-15T00:01:00Z`, zero job-local counts/budget use, partial coverage inherited from saved traversal and `continuation:{available:false,fromJobId:'job-1',restarted:false,restartReason:null}`. Budget limits reset per job; identities, deferred refreshes and traversal progress persist. The original job remains partial and immutable. `available` becomes true on a terminal job only when there is explicit resumable or restartable pending work; UI offers Continue search for cancelled/failed jobs too when this flag is true. No automatic resume of user-cancelled work.
+
+### Expired-cursor bounded restart
+
+If adapter discovery rejects saved progress, GET `/api/import-jobs/job-2` returns this running snapshot replacement (job-2 identity/time as above):
+
+```json
+{
+  "state": "running",
+  "stage": "discovering",
+  "startedAt": "2026-10-15T00:01:01Z",
+  "budget": {
+    "discoveryUsed": 1,
+    "discoveryLimit": 10,
+    "detailUsed": 0,
+    "detailLimit": 100
+  },
+  "sources": [
+    {
+      "sourceId": "fixture",
+      "state": "running",
+      "coverage": "partial",
+      "error": null
+    }
+  ],
+  "coverage": {
+    "status": "partial",
+    "lastSuccessfulCheckAt": null,
+    "freshUntil": null,
+    "scopeKey": "fixture-scope-v1",
+    "caveats": [
+      "Saved cursor expired; discovery restarted within this job budget"
+    ]
+  },
+  "reasons": ["CURSOR_EXPIRED"],
+  "continuation": {
+    "available": false,
+    "fromJobId": "job-1",
+    "restarted": true,
+    "restartReason": "CURSOR_EXPIRED"
+  }
+}
+```
+
+The failed cursor request consumed one discovery attempt; restarting does not reset remaining budget. Invalid cursors use `CURSOR_INVALID` identically. Preserve saved offers and fresh details unless the inherited request is manual refresh. Incomplete old traversal cannot establish coverage; only the replacement traversal can complete it. Explain the restart in the UI even if the replacement later succeeds.
+
+### Manual refresh attached to ordinary work
+
+POST `/api/import-requests` with a new key at `00:00:05Z` while ordinary job-1 is running:
+
+```json
+{
+  "area": { "center": { "latitude": 35, "longitude": 135 }, "radiusKm": 5 },
+  "intent": "manual_refresh"
+}
+```
+
+202 response:
+
+```json
+{
+  "id": "request-refresh",
+  "area": { "center": { "latitude": 35, "longitude": 135 }, "radiusKm": 5 },
+  "intent": "manual_refresh",
+  "state": "running",
+  "disposition": "attached",
+  "jobIds": ["job-1"],
+  "pendingFollowUp": true,
+  "createdAt": "2026-10-15T00:00:05Z",
+  "finishedAt": null,
+  "error": null
+}
+```
+
+Track request time as its refresh cutoff. Successful detail checks performed since it satisfy that offer's recheck; skipped-as-fresh details do not. Repeated refresh clicks while the same area/scope refresh intent is pending attach to that intent and retain the original cutoff; keys prevent transport retries and intent deduplication prevents double-click job duplication. A refresh after terminal completion is a new action.
+
+If ordinary job-1 finishes at `00:00:30Z` after skipping two recent details, GET `/api/import-requests/request-refresh` returns:
+
+```json
+{
+  "id": "request-refresh",
+  "area": { "center": { "latitude": 35, "longitude": 135 }, "radiusKm": 5 },
+  "intent": "manual_refresh",
+  "state": "queued",
+  "disposition": "attached",
+  "jobIds": ["job-1", "job-refresh-1"],
+  "pendingFollowUp": true,
+  "createdAt": "2026-10-15T00:00:05Z",
+  "finishedAt": null,
+  "error": null
+}
+```
+
+GET job-refresh-1 is #5's queued snapshot with its own ID, createdAt `00:00:30Z`, the same area/scope and zero job-local counters. It carries the refresh obligation privately; it need not repeat successfully completed discovery. It remains visible in the active queue. Once its two required rechecks succeed, it returns:
+
+```json
+{
+  "id": "job-refresh-1",
+  "state": "succeeded",
+  "stage": "finished",
+  "createdAt": "2026-10-15T00:00:30Z",
+  "startedAt": "2026-10-15T00:00:31Z",
+  "finishedAt": "2026-10-15T00:00:36Z",
+  "counts": {
+    "discovered": 0,
+    "checked": 2,
+    "added": 0,
+    "updated": 1,
+    "unchanged": 1,
+    "rejected": 0
+  },
+  "budget": {
+    "discoveryUsed": 0,
+    "discoveryLimit": 10,
+    "detailUsed": 2,
+    "detailLimit": 100
+  },
+  "sources": [
+    {
+      "sourceId": "fixture",
+      "state": "succeeded",
+      "coverage": "complete",
+      "error": null
+    }
+  ],
+  "coverage": {
+    "status": "complete",
+    "lastSuccessfulCheckAt": "2026-10-15T00:00:36Z",
+    "freshUntil": "2026-10-16T00:00:36Z",
+    "scopeKey": "fixture-scope-v1",
+    "caveats": ["Configured source coverage only"]
+  }
+}
+```
+
+That coverage is valid only if job-1 completed required discovery and the follow-up cleared all outstanding work. Request-refresh then becomes succeeded, `pendingFollowUp:false`, finishedAt `00:00:36Z`. If bounded follow-up cannot finish, request becomes partial/failed/cancelled truthfully and exposes its terminal job for explicit continuation; it must not stay pending indefinitely or report success. New required discovery can be included in the same bounded follow-up. Added/updated counts displayed per job must not be summed as unique offers across jobs without deduplicating saved identities.
+
+### Cancellation and failures with shared work
+
+POST `/api/import-requests/request-refresh/cancel` `{}` cancels that intent and its exclusively owned queued follow-ups; shared ordinary job-1 continues for other requests. The 200 request response keeps its IDs/area/intent and sets `state:'cancelled'`, `pendingFollowUp:false`, `finishedAt` to cancellation time, `error:null`. Request cancellation detaches from shared work; cancellation of the last attached active intent requests cooperative job cancellation. A completed cached reference does not own the historical job. A job-level cancel is the explicit queue/execution control and affects attached requests: they report cancellation unless their intent had already completed. Terminal requests do not reopen. No saved records are deleted.
+
+For a running cooperative cancellation, POST job cancel first returns running with cancelRequestedAt set; after an active detail commits, GET returns cancelled/finished with truthful saved counts. Example replacement on #5's base: `{"state":"cancelled","stage":"finished","startedAt":"2026-10-15T00:00:01Z","finishedAt":"2026-10-15T00:00:10Z","cancelRequestedAt":"2026-10-15T00:00:09Z","counts":{"discovered":1,"checked":1,"added":1,"updated":0,"unchanged":0,"rejected":0},"budget":{"discoveryUsed":1,"discoveryLimit":10,"detailUsed":1,"detailLimit":100},"sources":[{"sourceId":"fixture","state":"cancelled","coverage":"partial","error":null}],"coverage":{"status":"partial","lastSuccessfulCheckAt":null,"freshUntil":null,"scopeKey":"fixture-scope-v1","caveats":["Cancelled; saved results retained"]},"reasons":["USER_CANCELLED"],"continuation":{"available":true,"fromJobId":null,"restarted":false,"restartReason":null}}`.
+
+#5's blocked-source response is the failed case with no new progress. If another source succeeds or useful records commit, use partial with per-source errors, reasons and saved counts instead. Saved area results and their actual check times remain readable after either outcome. UI distinguishes an empty successful traversal from failure by job/source outcome, never by listing-array length.

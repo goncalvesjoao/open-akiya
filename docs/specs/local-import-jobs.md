@@ -89,3 +89,7 @@ Connect the selected map area to a local, persistent import service. Users expli
 
 - Depends on the map spec's area and result contracts. Completion requires the fixture-backed local workflow, not real bank access.
 - Request budgets and cache age are initial configurable defaults, not source-approved limits. The parent spec remains the overarching product contract.
+
+## Shared contract ownership
+
+The concrete selected-area/query semantics are owned by #2; listing/results, durable request/job API, and adapter definitions/examples by #5; policy extensions and continuation/manual-refresh examples by #6. #7 consumes those contracts and #4 implements the same adapter boundary. Reuse these definitions and fixture recipes for the aggregate acceptance journey; this parent adds no competing wire contract. Existing scope, completion gates and testing seams remain unchanged.

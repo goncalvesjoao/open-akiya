@@ -55,3 +55,11 @@ Database design, worker scheduling policies, source access, and live adapters ar
 ## Further Notes
 
 - Parent #3 retains the complete acceptance contract. This child owns the implementation decisions allocated here; completing it alone does not close #3. Existing map and live-source requirements remain in their respective specs.
+
+## Contract consumption and fixture handoff
+
+Use #2's `SelectedArea`/`AreaQuery`, #5's `ListingProjection`, `AreaResults`, job endpoints and base snapshots, and #6's policy examples as the shared mock recipes. Do not independently define browser job states, source cursors or listing shapes. Expand snapshot replacements into full mocked GET responses; use the same expanded fixtures at the job-API seam once the backend exists. Source references remain synthetic, and sample mode stays visible.
+
+Reconnect using request ID, then poll its linked job IDs and the active queue. A job's success is insufficient while the request says pendingFollowUp. Show immutable job area separately from the current selection. Refresh the current area's saved-data query on each observed terminal job/request transition, including failure/cancellation; do not replace the selection with job area. Map movement calls only the query boundary. Abort/stale-query handling prevents an older query response overwriting a newer selection.
+
+Fixture matrix: #5 queued/running => visible queue/stage and counts; empty success => Search finished with zero additions; #6 budget partial => saved pins and Continue search; expired cursor => restart explanation; manual attachment/follow-up => pending then queued then final request outcome; cancellation => retained records and Cancelled; blocked source => Failed with existing results retained. Coverage caveats and unknown successful-check times remain visible for every outcome. Mock development can start now; completion still requires #2/#6 integration and the agreed real-runtime browser journey. Use simulated DOM tests for control/status/error behavior, real browser checks for map rendering/gestures and the required selected-area import journey, and API/test-Postgres fixtures for scheduling/policy edges as CODING_STANDARDS.md requires.

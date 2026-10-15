@@ -36,7 +36,7 @@ The diagram shows integration/completion dependencies, not a requirement to wait
 
 ## Shared contracts before parallel implementation
 
-Record these contracts in the owning specs and use the same deterministic fixtures across workstreams. Contract alignment is a prerequisite, not a new implementation spec or an assumption that the contracts already exist.
+Record these contracts in the owning specs and use the same deterministic fixtures across workstreams. The 2026-10-15 alignment is recorded in the existing owning specs below. These are documentation contracts, not implemented endpoints. Consumers expand their shared response recipes into deterministic fixtures rather than inventing separate shapes.
 
 | Contract                                                                                                                 | Owner      | Consumers  |
 | ------------------------------------------------------------------------------------------------------------------------ | ---------- | ---------- |
@@ -68,3 +68,11 @@ Keep those GitHub relationships synchronized when this plan changes. The specs r
 4. Run the permitted source's small live pilot after #3 passes, then evaluate #4 and parent #1 completion. No unresolved source permission is treated as a completed live integration.
 
 Do not add duplicate implementation tasks for #1 or #3. Preserve bounded requests, local-only storage, no paid discovery, and the user-confirmed scope throughout parallel work.
+
+## Contract alignment handoff (2026-10-15)
+
+- [#2 selected-area/query contract](specs/map-area-selection.md#shared-selected-area-and-query-contract) and [#5 listing/results/job/adapter contracts](specs/persistent-local-import-runtime.md#shared-contracts-listing-projection-and-area-results) permit map and backend foundation work in parallel.
+- [#6 policy examples](specs/import-reuse-and-continuation.md#shared-policy-extensions-and-response-examples) permit policy fixture work and [#7 mock UI development](specs/import-progress-map-ui.md#contract-consumption-and-fixture-handoff) while the runtime finishes. Concrete recipes cover queued/running, empty success, partial/continuation, cursor restart, refresh follow-up, cancellation and failure. Implementations should materialize the same recipes as fixtures; none exist in runtime code yet.
+- [#4 source handoff](specs/live-area-source-integration.md#shared-contract-handoff-and-remaining-source-decisions) retains the unresolved permitted-source and geographic-evidence gates. Investigation can proceed now; enabled live work and its pilot retain their existing requirements.
+
+No new product choice blocks synthetic parallel work. Technical recommendations are explicit in the owning specs, including a configurable 25% stale-refresh reservation. Readiness here refers to interface documentation; all existing acceptance checks and completion dependencies remain required.
