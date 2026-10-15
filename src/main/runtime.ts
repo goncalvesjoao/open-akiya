@@ -1,6 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { createHash, randomUUID } from 'node:crypto'
-import { distanceMetres, isSelectedArea } from '../shared/geography'
+import { isSelectedArea } from '../shared/geography'
 import type {
   AreaResults,
   Coverage,
@@ -19,6 +19,7 @@ import {
 import { invalid, LocalApiError, safeError } from './errors'
 import { listingProjection } from './projection'
 import { municipalityReference } from './municipalities'
+import { locationMatchesArea } from './listing-area'
 import type { MunicipalityGroup } from '../shared/listings'
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -299,14 +300,7 @@ export class ImportRuntime {
     const visible = listings.filter(
       (listing) =>
         (showUnavailable || listing.availability !== 'unavailable') &&
-        (listing.location.kind === 'municipality'
-          ? Boolean(
-              municipalityReference(listing.location.municipalityId, area),
-            )
-          : (listing.location.kind === 'verified' ||
-              listing.location.kind === 'unverified') &&
-            distanceMetres(area.center, listing.location.point) <=
-              area.radiusKm * 1000 + 1e-8),
+        locationMatchesArea(listing.location, area),
     )
     const groups = new Map<string, MunicipalityGroup>()
     for (const listing of visible) {

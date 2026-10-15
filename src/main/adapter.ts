@@ -5,9 +5,8 @@ import type {
   Location,
   SelectedArea,
 } from '../shared/listings'
-import { distanceMetres } from '../shared/geography'
 import { fixtures, municipalitySourcePointEvidence } from './fixtures'
-import { municipalityReference } from './municipalities'
+import { locationMatchesArea } from './listing-area'
 
 export type AdapterCapabilities = {
   sourceId: string
@@ -120,12 +119,7 @@ export function syntheticAdapter(
     async discover({ area }, context) {
       await context.request('discovery', 'https://example.invalid/discovery')
       const inside = offers.filter((offer) =>
-        offer.location.kind === 'municipality'
-          ? Boolean(municipalityReference(offer.location.municipalityId, area))
-          : (offer.location.kind === 'verified' ||
-              offer.location.kind === 'unverified') &&
-            distanceMetres(area.center, offer.location.point) <=
-              area.radiusKm * 1000 + 1e-8,
+        locationMatchesArea(offer.location, area),
       )
       return {
         candidates: inside.map((offer) => ({
