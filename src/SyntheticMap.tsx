@@ -118,8 +118,10 @@ function MapCanvas({
     }
   }, [])
   useEffect(() => {
+    map.current!.panTo([area.center.latitude, area.center.longitude])
+  }, [area.center.latitude, area.center.longitude])
+  useEffect(() => {
     const instance = map.current!
-    instance.panTo([area.center.latitude, area.center.longitude])
     const layers = L.layerGroup().addTo(instance)
     L.circle([area.center.latitude, area.center.longitude], {
       radius: area.radiusKm * 1000,

@@ -125,3 +125,60 @@ test('supports pointer area selection, pan and zoom, mobile results and controll
     page.getByText('No listings in this selected area.', { exact: false }),
   ).toBeVisible()
 })
+
+// Leaflet viewport placement after a pointer drag requires real browser layout.
+test('keeps the manually panned viewport when selecting listings and toggling unavailable offers', async ({
+  page,
+}) => {
+  await page.route('https://tile.openstreetmap.org/**', (route) =>
+    route.abort(),
+  )
+  await page.goto('/#map')
+  const map = page.getByRole('region', { name: 'Interactive synthetic map' })
+  const marker = map.getByRole('button', {
+    name: 'Pin: Sample listing with unknown price',
+    exact: true,
+  })
+  await expect(marker).toBeVisible()
+  await map.scrollIntoViewIfNeeded()
+  const before = await marker.boundingBox()
+  const box = await map.boundingBox()
+  if (!before || !box) throw new Error('Map or marker has no layout')
+  await page.mouse.move(box.x + 80, box.y + 120)
+  await page.mouse.down()
+  await page.mouse.move(box.x + 160, box.y + 160, { steps: 8 })
+  await page.mouse.up()
+  await expect
+    .poll(async () => (await marker.boundingBox())?.x)
+    .toBeCloseTo(before.x + 80, 0)
+  const panned = await marker.boundingBox()
+  if (!panned) throw new Error('Panned marker has no layout')
+  async function expectPanPreserved() {
+    await expect
+      .poll(async () => (await marker.boundingBox())?.x)
+      .toBeCloseTo(panned!.x, 0)
+    await expect
+      .poll(async () => (await marker.boundingBox())?.y)
+      .toBeCloseTo(panned!.y, 0)
+  }
+  await page
+    .getByRole('button', { name: 'Sample sale listing', exact: true })
+    .click()
+  await expectPanPreserved()
+  await map
+    .getByRole('button', { name: 'Pin: Sample rental listing', exact: true })
+    .click()
+  await expect(
+    page.getByRole('region', { name: 'Listing details' }),
+  ).toContainText('Sample rental listing')
+  await expectPanPreserved()
+  await page.getByLabel('Show unavailable').check()
+  await expect(
+    map.getByRole('button', {
+      name: 'Pin: Unavailable sample listing',
+      exact: true,
+    }),
+  ).toBeVisible()
+  await expectPanPreserved()
+  await expect(page.getByText('Selected: 35, 135 · 5 km')).toBeVisible()
+})
