@@ -1,3 +1,5 @@
+import SyntheticMap from './SyntheticMap'
+
 const repository = 'https://github.com/goncalvesjoao/open-akiya'
 
 function HouseMark() {
@@ -83,6 +85,7 @@ export default function App() {
         </a>
         <nav aria-label="Main navigation">
           <a href="#about">The idea</a>
+          <a href="#map">Synthetic map</a>
           <a href={repository} className="github-link">
             GitHub <span aria-hidden="true">↗</span>
           </a>
@@ -115,7 +118,7 @@ export default function App() {
               </a>
             </div>
             <p className="availability">
-              The map is on its way. Help shape what comes next.
+              Explore the synthetic map below. Help shape what comes next.
             </p>
           </div>
           <div className="hero-art">
@@ -131,6 +134,7 @@ export default function App() {
             </span>
           </div>
         </section>
+        <SyntheticMap />
         <section
           className="about container"
           id="about"
