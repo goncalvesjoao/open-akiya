@@ -17,7 +17,7 @@ import {
   type NormalizedFields,
 } from './adapter'
 import { invalid, LocalApiError, safeError } from './errors'
-import { listingProjection } from './projection'
+import { listingProjection, savedListingProjection } from './projection'
 import { municipalityReference } from './municipalities'
 import { locationMatchesArea } from './listing-area'
 import type { MunicipalityGroup } from '../shared/listings'
@@ -297,7 +297,7 @@ export class ImportRuntime {
     const listings: ListingProjection[] = this.db
       .prepare('SELECT data FROM listings')
       .all()
-      .map((row) => listingProjection(JSON.parse(String(row.data))))
+      .map((row) => savedListingProjection(JSON.parse(String(row.data))))
     const visible = listings.filter(
       (listing) =>
         (showUnavailable || listing.availability !== 'unavailable') &&

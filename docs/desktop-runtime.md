@@ -21,6 +21,8 @@ Closing the window hides the application while imports continue. Launching it ag
 
 The synthetic adapter independently discovers, fetches detail and normalizes one fixed offer at latitude 35, longitude 135. Other areas return a successful empty discovery rather than moving that offer. The worker persists actual discovery/detail request counts before dispatch; observation, approved listing projection, committed counts and candidate progress commit atomically. Repeated unchanged content has an `unchanged` count. Saved-data reads never invoke adapters. Rich coverage/freshness reuse and checkpoints remain future work; results conservatively report unknown coverage.
 
+Area-results queries use the supplied circle independently of import job input. Verified positions use inclusive geodesic membership, including across the antimeridian; source-provided uncertain positions remain unverified. Saved historical positions lacking nonblank verification evidence or a valid verification timestamp are exposed as unverified source points, while new verified observations must provide both. Municipality membership uses the documented synthetic reference geometry, including groups without representative points. Unknown-location candidates require saved intersecting discovery evidence. Availability is filtered before group counts, and reads retain successful source-check timestamps without collecting or claiming complete coverage.
+
 New request/job/lease tables are additive (`*_v2`); existing listing IDs and saved listings remain in place. Legacy foundation job tables remain retained but are not resumed or exposed through the new request contract. This avoids inventing user intents for historical foundation records.
 
 ## Remaining requirements
@@ -30,7 +32,7 @@ The current app imports fictional sample listings only. The base request/job con
 - Live source transport, robust field-patch/authoritative-null merging, invalid-observation handling and independent multi-source availability.
 - Source request budgets, rate limiting, retries, per-source outcomes, coverage/checkpoints, fair detail refresh allocation and freshness/containment reuse.
 - Independent request intent, shared-work cancellation, manual-refresh follow-ups, bounded continuation and expired-cursor recovery.
-- Unverified pins, municipality geometry and summaries, unknown-location associations and address/place lookup.
+- Live municipality reference geometry and address/place lookup. Synthetic unverified pins, municipality summaries and unknown-location associations are implemented.
 - Permitted Tsubata integration, geographic-reference and identity validation, residential eligibility and a bounded live pilot.
 - Windows/macOS validation, installer signing/notarization, release icons and published installers.
 

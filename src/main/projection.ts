@@ -12,14 +12,19 @@ function point(value: { latitude: number; longitude: number }) {
     invalid('Invalid source location')
   return { latitude: value.latitude, longitude: value.longitude }
 }
+function hasVerificationEvidence(
+  value: Extract<Location, { kind: 'verified' }>,
+): boolean {
+  return (
+    typeof value.evidence === 'string' &&
+    Boolean(value.evidence.trim()) &&
+    Number.isFinite(Date.parse(value.verifiedAt))
+  )
+}
 function location(value: Location): Location {
   switch (value?.kind) {
     case 'verified':
-      if (
-        typeof value.evidence !== 'string' ||
-        !Number.isFinite(Date.parse(value.verifiedAt))
-      )
-        invalid('Invalid source location')
+      if (!hasVerificationEvidence(value)) invalid('Invalid source location')
       return {
         kind: 'verified',
         point: point(value.point),
@@ -94,4 +99,24 @@ export function listingProjection(value: ListingProjection): ListingProjection {
     lastSeenAt: value.lastSeenAt,
     sourceCheckedAt: value.sourceCheckedAt,
   }
+}
+
+// Historical coordinates cannot establish verification. Apply this compatibility
+// rule only when reading persistence; new observations still require evidence.
+export function savedListingProjection(
+  value: ListingProjection,
+): ListingProjection {
+  const location = value.location
+  if (location?.kind === 'verified' && !hasVerificationEvidence(location)) {
+    return listingProjection({
+      ...value,
+      location: {
+        kind: 'unverified',
+        point: location.point,
+        precision: 'unknown',
+        sourceId: value.sourceRefs[0].sourceId,
+      },
+    })
+  }
+  return listingProjection(value)
 }
