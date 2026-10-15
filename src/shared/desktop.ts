@@ -57,11 +57,17 @@ export type ImportJob = {
   }
 }
 export type Job = ImportJob
-export type CreateImport = {
-  area: SelectedArea
-  intent: 'import'
-  idempotencyKey: string
-}
+export type CreateImport =
+  | {
+      intent: 'continue'
+      fromJobId: string
+      idempotencyKey: string
+    }
+  | {
+      area: SelectedArea
+      intent: 'import'
+      idempotencyKey: string
+    }
 export type DesktopAPI = {
   searchLocations(query: string): Promise<LocationSearchResults>
   createImportRequest(input: CreateImport): Promise<ImportRequest>
