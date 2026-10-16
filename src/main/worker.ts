@@ -1,5 +1,6 @@
 import { createLocationSearch } from './location-search'
 import { ImportRuntime } from './runtime'
+import { testClock } from './test-clock'
 import { syntheticAdapter } from './adapter'
 import {
   fixtures,
@@ -10,9 +11,13 @@ import {
 import { safeError } from './errors'
 import type { WorkerRequest } from '../shared/desktop'
 
-const runtime = new ImportRuntime(process.argv[2], 300, {
+// Synthetic E2E imports advance pacing without waiting on wall time.
+const fastTest = process.env.OPEN_AKIYA_TEST_FAST === '1'
+const delay = fastTest ? 0 : 300
+const runtime = new ImportRuntime(process.argv[2], delay, {
+  ...(fastTest ? testClock() : {}),
   adapters: [
-    syntheticAdapter(300, [
+    syntheticAdapter(delay, [
       fixtures[0],
       ...uncertainFixtures,
       ...municipalityFixtures,

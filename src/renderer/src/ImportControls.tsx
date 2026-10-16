@@ -74,6 +74,8 @@ export default function ImportControls({
             setJobs(
               (await window.openAkiya.listImports({ state: 'active' })).jobs,
             )
+            // A fast import can finish between active-queue reads.
+            previous.current = ''
             pendingAction.current = null
           } catch {
             setError(

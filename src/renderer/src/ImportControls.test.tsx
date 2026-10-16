@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -90,4 +91,28 @@ test('announces worker failure with a recovery action', async () => {
     'Quit and reopen to recover',
   )
   expect(screen.queryByText('private failure')).not.toBeInTheDocument()
+})
+
+test('refreshes saved results when an import finishes before the active queue is read', async () => {
+  vi.useFakeTimers()
+  try {
+    setup()
+    const settled = vi.fn()
+    await act(async () => {
+      render(<ImportControls area={initialArea} onSettled={settled} />)
+    })
+    settled.mockClear()
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Import sample listings' }),
+      )
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(settled).toHaveBeenCalledTimes(1)
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
 })

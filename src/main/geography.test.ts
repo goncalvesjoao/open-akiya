@@ -15,11 +15,9 @@ beforeEach(async () => {
     ...testClock(),
     adapters: [syntheticAdapter(0, fixtures)],
   })
-  for (const area of [
-    initialArea,
-    { center: { latitude: 0, longitude: 179.99 }, radiusKm: 5 },
-    { center: { latitude: 0, longitude: 0 }, radiusKm: 5 },
-  ]) {
+})
+async function seedAreas(areas: AreaQuery['area'][]) {
+  for (const area of areas) {
     const request = runtime.createRequest({
       area,
       intent: 'import',
@@ -29,7 +27,7 @@ beforeEach(async () => {
       .poll(() => runtime.inspect(request.jobIds[0]).state)
       .toBe('succeeded')
   }
-})
+}
 afterEach(async () => {
   await runtime.close()
 })
@@ -38,6 +36,7 @@ async function queryListings(query: AreaQuery) {
 }
 
 test('returns verified inside and coincident offers but excludes outside and unavailable offers', async () => {
+  await seedAreas([initialArea])
   const result = await queryListings({
     area: { center: { latitude: 35, longitude: 135 }, radiusKm: 5 },
     showUnavailable: false,
@@ -51,6 +50,10 @@ test('returns verified inside and coincident offers but excludes outside and una
 })
 
 test('includes a boundary offer and wraps longitude across the antimeridian', async () => {
+  await seedAreas([
+    { center: { latitude: 0, longitude: 179.99 }, radiusKm: 5 },
+    { center: { latitude: 0, longitude: 0 }, radiusKm: 5 },
+  ])
   const boundary = await queryListings({
     area: {
       center: { latitude: 0, longitude: 0.04496608029593653 },
@@ -75,6 +78,7 @@ test('includes a boundary offer and wraps longitude across the antimeridian', as
 })
 
 test('only explicit unavailability is hidden and Show unavailable preserves offer identities', async () => {
+  await seedAreas([initialArea])
   const result = await queryListings({
     area: { center: { latitude: 35, longitude: 135 }, radiusKm: 5 },
     showUnavailable: true,

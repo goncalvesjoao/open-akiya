@@ -4,11 +4,18 @@ import {
   render,
   screen,
   within,
+  waitFor,
 } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import AreaMap from './AreaMap'
-import { fixtures, municipalityFixtures } from '../../main/fixtures'
+import {
+  fixtures,
+  municipalityFixtures,
+  uncertainFixtures,
+  unknownFixtures,
+} from '../../main/fixtures'
 import { initialArea } from '../../shared/geography'
+import { listingTitle } from './listings/presentation'
 import type { AreaResults } from '../../shared/listings'
 
 afterEach(cleanup)
@@ -215,3 +222,143 @@ test('keeps selected details and truthful coverage when refreshing saved results
   )
   expect(screen.getByText('Configured synthetic sources only')).toBeVisible()
 })
+
+// Query membership is covered at the worker seam; these cases exercise rendering
+// and selection against controlled public API responses.
+test.each([
+  {
+    name: 'unknown location',
+    offers: unknownFixtures.slice(0, 2),
+    list: 'Unknown location',
+    title: 'Unknown-location sample listing',
+    caveat: 'Exact location and distance unknown',
+    japanese: '所在地不明のサンプル',
+  },
+  {
+    name: 'unverified source point',
+    offers: [uncertainFixtures[0], uncertainFixtures[2]],
+    list: 'Listing results',
+    title: 'Unverified sample listing',
+    caveat: 'Source position; accuracy unknown',
+    japanese: '位置未確認サンプル',
+  },
+  {
+    name: 'approximate source point',
+    offers: [uncertainFixtures[1], uncertainFixtures[2]],
+    list: 'Listing results',
+    title: 'Approximate sample listing',
+    caveat: 'Approximate source position',
+    japanese: '概略位置サンプル',
+  },
+  {
+    name: 'municipality',
+    offers: municipalityFixtures.slice(0, 2),
+    list: 'Offers in Sample municipality',
+    title: 'Municipality sample listing',
+    caveat: 'Exact listing location and distance are unknown',
+    japanese: '自治体のみのサンプル',
+  },
+])(
+  'renders $name details and clears selection when filtering or changing area',
+  async ({ offers, list, title, caveat, japanese }) => {
+    Object.defineProperty(window, 'openAkiya', {
+      configurable: true,
+      value: {
+        listImports: () => new Promise(() => {}),
+        areaResults: vi.fn(async (query) => {
+          const listings =
+            query.area.center.latitude === 35
+              ? offers.filter(
+                  (offer) =>
+                    query.showUnavailable ||
+                    offer.availability !== 'unavailable',
+                )
+              : []
+          return {
+            ...savedResults(),
+            ...query,
+            listings,
+            municipalityGroups:
+              list.startsWith('Offers') && listings.length
+                ? [
+                    {
+                      municipalityId: 'fixture:municipality-1',
+                      nameJa: 'サンプル自治体',
+                      listingIds: listings.map((offer) => offer.id),
+                      count: listings.length,
+                      representativePoint: null,
+                      representativePointProvenance: null,
+                    },
+                  ]
+                : [],
+          }
+        }),
+      },
+    })
+    render(<AreaMap />)
+    if (list.startsWith('Offers')) {
+      fireEvent.click(
+        await screen.findByText('Sample municipality · 1 listing'),
+      )
+    }
+    const results = await screen.findByRole('list', { name: list })
+    const button = await within(results).findByRole('button', {
+      name: title,
+    })
+    expect(results).not.toHaveTextContent(/\d+\.\d+ km/)
+    if (!list.startsWith('Offers')) expect(results).toHaveTextContent(caveat)
+    if (list === 'Unknown location')
+      expect(
+        within(
+          screen.getByRole('list', { name: 'Listing results' }),
+        ).queryByRole('button', { name: title }),
+      ).toBeNull()
+    fireEvent.click(button)
+    const details = screen.getByRole('region', { name: 'Listing details' })
+    expect(details).toHaveTextContent(caveat)
+    const disclosure = within(details).getByText(
+      'Original Japanese source text',
+    )
+    fireEvent.click(disclosure)
+    expect(disclosure.closest('details')).toHaveAttribute('open')
+    expect(within(details).getByText(japanese)).toBeVisible()
+    expect(
+      within(details).getByRole('link', { name: 'Original source ↗' }),
+    ).toHaveAttribute('href', offers[0].sourceRefs[0].url)
+    fireEvent.click(screen.getByLabelText('Show unavailable'))
+    if (list.startsWith('Offers'))
+      await screen.findByText('Sample municipality · 2 listings')
+    const unavailable = offers.find(
+      (offer) => offer.availability === 'unavailable',
+    )!
+    fireEvent.click(
+      await within(await screen.findByRole('list', { name: list })).findByRole(
+        'button',
+        {
+          name: listingTitle(unavailable),
+        },
+      ),
+    )
+    expect(
+      screen.getByRole('region', { name: 'Listing details' }),
+    ).toHaveTextContent('Availability: unavailable')
+    fireEvent.click(screen.getByLabelText('Show unavailable'))
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('region', { name: 'Listing details' }),
+      ).toBeNull(),
+    )
+    fireEvent.click(
+      await within(await screen.findByRole('list', { name: list })).findByRole(
+        'button',
+        { name: title },
+      ),
+    )
+    fireEvent.change(screen.getByLabelText('Latitude'), {
+      target: { value: '34' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply area' }))
+    await screen.findByText(/No listings in this selected area/)
+    expect(screen.queryByRole('region', { name: 'Listing details' })).toBeNull()
+  },
+)
