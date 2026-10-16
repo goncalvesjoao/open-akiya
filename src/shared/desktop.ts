@@ -65,7 +65,7 @@ export type CreateImport =
     }
   | {
       area: SelectedArea
-      intent: 'import'
+      intent: 'import' | 'manual_refresh'
       idempotencyKey: string
     }
 export type DesktopAPI = {

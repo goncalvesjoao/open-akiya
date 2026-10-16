@@ -188,7 +188,7 @@ test('rejects invalid area shapes and disabled sources before adapter calls', ()
   }
   expect(runtime.list({ state: 'active' }).jobs).toEqual([])
   expect(() =>
-    runtime.createRequest({ ...input, intent: 'manual_refresh' }),
+    runtime.createRequest({ ...input, intent: 'unsupported' }),
   ).toThrow()
   const disabled = open('disabled.sqlite', 1, [])
   expect(() => disabled.createRequest(input)).toThrow(
