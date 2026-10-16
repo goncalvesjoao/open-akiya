@@ -4,7 +4,7 @@
 
 Use Electron, React/TypeScript, a utility-process worker and worker-owned SQLite. Job operations cross a validated, context-isolated preload bridge; there is no local HTTP server. The renderer cannot access Node.js, SQL, source observations or arbitrary IPC. Closing the window keeps the application and imports running; reopening from the launcher restores the window. Explicit Quit stops scheduling and preserves committed work for recovery on restart. Cancelled work never resumes automatically. Sleep, shutdown and process crashes interrupt execution; no operating-system service or scheduling while fully exited is promised.
 
-The full acceptance requirements below remain targets. The desktop foundation implements basic synthetic create/list/inspect/cancel/results operations, exact-area active-job reuse and restart recovery. It does **not** complete freshness/containment policies, request-intent ownership, manual-refresh follow-ups, bounded continuation, rich job counters, all location variants, address lookup or live-source activation. See [desktop runtime](../desktop-runtime.md) for the implementation boundary. Keep these gaps explicit rather than weakening acceptance.
+The full acceptance requirements below remain targets. The desktop foundation implements basic synthetic create/list/inspect/cancel/results operations, exact-area active-job reuse and restart recovery. The worker now supports freshness/containment policies, request-intent ownership, bounded manual-refresh follow-ups and continuation with deterministic adapters. The complete recovery fault matrix, renderer integration and live-source activation remain separate milestones. See [desktop runtime](../desktop-runtime.md) for the implementation boundary. Keep these gaps explicit rather than weakening acceptance.
 
 Part of #3, under #1. Can start alongside #2 after area/listing contract alignment; no finished-map dependency. See the [implementation plan](../implementation-plan.md) for parallel start conditions and integration gates.
 
@@ -185,15 +185,17 @@ Location fixture substitutions use the same listing shape: verified `{"kind":"ve
 
 Use structured-clone-safe JSON-shaped messages through named preload operations. Main validates the owning WebContents, main frame and exact application URL; the worker validates every argument. Reject unauthorized senders. No loopback listener, HTTP authorization, CSRF mechanism or browser database credential is required. All operations are local and polling-compatible. The table and rich DTOs below are the target API; the foundation subset in `src/shared/desktop.ts` must be extended before these milestones can close.
 
-| Operation                         | Request                                         | Response                                                                           |
-| --------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `createImportRequest(input)`      | `{area, intent: 'import'}` and `idempotencyKey` | Promise of `ImportRequest` including disposition                                   |
-| `inspectImportRequest(requestId)` | none                                            | Promise of `ImportRequest`                                                         |
-| `inspectImport(jobId)`            | none                                            | Promise of `ImportJob`                                                             |
-| `listImports({state: "active"})`  | none                                            | Promise of `{jobs: ImportJob[]}` including queued and running, oldest queued first |
-| `cancelImport(jobId)`             | `{}`                                            | Promise of current `ImportJob`                                                     |
-| `cancelImportRequest(requestId)`  | `{}`                                            | Promise of current `ImportRequest`; #6 defines shared-work cancellation            |
-| `areaResults(query)`              | #2 `AreaQuery`                                  | Promise of `AreaResults`; read-only, no source requests                            |
+| Operation                         | Request                               | Response                                                                           |
+| --------------------------------- | ------------------------------------- | ---------------------------------------------------------------------------------- |
+| `createImportRequest(input)`      | `{area, intent}` and `idempotencyKey` | Promise of `ImportRequest` including disposition                                   |
+| `inspectImportRequest(requestId)` | none                                  | Promise of `ImportRequest`                                                         |
+| `inspectImport(jobId)`            | none                                  | Promise of `ImportJob`                                                             |
+| `listImports({state: "active"})`  | none                                  | Promise of `{jobs: ImportJob[]}` including queued and running, oldest queued first |
+| `cancelImport(jobId)`             | `{}`                                  | Promise of current `ImportJob`                                                     |
+| `cancelImportRequest(requestId)`  | `{}`                                  | Promise of current `ImportRequest`; #6 defines shared-work cancellation            |
+| `areaResults(query)`              | #2 `AreaQuery`                        | Promise of `AreaResults`; read-only, no source requests                            |
+
+Create intent is `import` or `manual_refresh`; #6 also defines bounded `continue` input using `fromJobId` instead of area.
 
 ```ts
 type JobState =
