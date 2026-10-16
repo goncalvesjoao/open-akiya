@@ -58,7 +58,7 @@ const partial: ImportJob = {
   sources: [
     { sourceId: 'fixture', state: 'partial', coverage: 'partial', error: null },
   ],
-  reasons: ['DISCOVERY_BUDGET_EXHAUSTED'],
+  reasons: ['BUDGET_EXHAUSTED'],
   continuation: { ...queued.continuation, fromJobId: null, available: true },
 }
 const cancelled: ImportJob = {
@@ -131,13 +131,13 @@ const restartedPartial: ImportJob = {
       state: 'partial',
       coverage: 'partial',
       error: {
-        code: 'DISCOVERY_BUDGET_EXHAUSTED',
+        code: 'BUDGET_EXHAUSTED',
         message: 'Discovery request budget exhausted',
         retryable: false,
       },
     },
   ],
-  reasons: [...restarted.reasons, 'DISCOVERY_BUDGET_EXHAUSTED'],
+  reasons: [...restarted.reasons, 'BUDGET_EXHAUSTED'],
   continuation: { ...restarted.continuation, available: true },
 }
 const restartedSucceeded: ImportJob = {
