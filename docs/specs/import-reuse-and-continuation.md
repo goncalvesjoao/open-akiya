@@ -4,7 +4,7 @@
 
 Use Electron, React/TypeScript, a utility-process worker and worker-owned SQLite. Job operations cross a validated, context-isolated preload bridge; there is no local HTTP server. The renderer cannot access Node.js, SQL, source observations or arbitrary IPC. Closing the window keeps the application and imports running; reopening from the launcher restores the window. Explicit Quit stops scheduling and preserves committed work for recovery on restart. Cancelled work never resumes automatically. Sleep, shutdown and process crashes interrupt execution; no operating-system service or scheduling while fully exited is promised.
 
-The full acceptance requirements below remain targets. The desktop foundation implements basic synthetic create/list/inspect/cancel/results operations, covering active-job attachment, independent request cancellation and restart recovery. Queued work can reuse successful checks obtained while waiting. It does **not** complete general freshness policy, manual-refresh follow-ups, bounded continuation or live-source activation. See [desktop runtime](../desktop-runtime.md) for the implementation boundary. Keep these gaps explicit rather than weakening acceptance.
+The full acceptance requirements below remain targets. The desktop foundation implements basic synthetic create/list/inspect/cancel/results operations and explicit bounded continuation, covering active-job attachment, independent request cancellation and restart recovery. Queued work can reuse successful checks obtained while waiting. It does **not** complete general freshness policy, manual-refresh follow-ups, or live-source activation. See [desktop runtime](../desktop-runtime.md) for the implementation boundary. Keep these gaps explicit rather than weakening acceptance.
 
 Part of #3, under #1. Can start once #5 job/adapter contracts settle; integrated completion is blocked by #5. Can overlap #7 using agreed API fixtures. See the [implementation plan](../implementation-plan.md).
 
@@ -96,6 +96,8 @@ A cached ordinary import resolves, for example:
 The linked succeeded job is the covering check; area-results exposes its actual check time. Manual refresh cannot use this disposition. An identical or fully covering running job instead resolves with `disposition:'attached'`, that job's ID and a queued/running request state. Partial overlap creates a queued job; reusable candidates/details are reconsidered when it starts. Recover by persisted request ID, then inspect its job IDs. Pending state is persisted in worker-owned SQLite, not inferred from renderer memory. No response claims manual completion just because the attached ordinary job finished.
 
 ### Partial results and explicit continuation
+
+Full shared inspection/request fixtures for this subset are in `src/shared/continuation-fixtures.ts`. Runtime verification is in `src/main/continuation.test.ts`.
 
 `inspectImport("job-1")` after discovery budget exhaustion returns #5's base snapshot with:
 
