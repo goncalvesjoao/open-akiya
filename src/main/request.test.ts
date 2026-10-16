@@ -348,7 +348,6 @@ test('a retained queued execution re-evaluates newly completed covering cache af
         limitation: null,
         discovered: [],
         completed: [],
-        reuseAfter: first.createdAt,
       }),
     )
     db.prepare('INSERT INTO import_requests_v2 VALUES (?,?,?,?,?)').run(
@@ -358,11 +357,25 @@ test('a retained queued execution re-evaluates newly completed covering cache af
       queuedJob.id,
       JSON.stringify(queuedRequest),
     )
+    const detachedRequest = {
+      ...queuedRequest,
+      id: 'detached-retained-request',
+      state: 'cancelled',
+      finishedAt: first.createdAt,
+    }
+    db.prepare('INSERT INTO import_requests_v2 VALUES (?,?,?,?,?)').run(
+      detachedRequest.id,
+      'detached-retained-key',
+      JSON.stringify({ area: initialArea, intent: 'import' }),
+      queuedJob.id,
+      JSON.stringify(detachedRequest),
+    )
     db.close()
     runtime = new ImportRuntime(path, 1, clock)
     await expect
       .poll(() => runtime.inspectRequest(queuedRequest.id).state)
       .toBe('succeeded')
+    expect(runtime.inspectRequest(detachedRequest.id)).toEqual(detachedRequest)
     const covering = runtime.inspect(first.jobIds[0])
     expect(runtime.inspectRequest(queuedRequest.id)).toMatchObject({
       disposition: 'cached',
