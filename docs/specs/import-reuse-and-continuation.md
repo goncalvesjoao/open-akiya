@@ -213,7 +213,9 @@ If adapter discovery rejects saved progress, `inspectImport("job-2")` returns th
 }
 ```
 
-The failed cursor request consumed one discovery attempt; restarting does not reset remaining budget. Invalid cursors use `CURSOR_INVALID` identically. Preserve saved offers and fresh details unless the inherited request is manual refresh. Incomplete old traversal cannot establish coverage; only the replacement traversal can complete it. Explain the restart in the UI even if the replacement later succeeds.
+The failed cursor request consumed one discovery attempt; restarting does not reset remaining budget. Invalid cursors use `CURSOR_INVALID` identically. Preserve saved offers and fresh details unless the inherited request is manual refresh. Incomplete old traversal cannot establish coverage; only the replacement traversal can complete it. Persist the restart flags, reasons and caveats through later continuations and successful replacement completion so the UI can explain the restart after reconnecting. Reset date-order evidence from the abandoned traversal; independently established completed checkpoint boundaries remain valid under unchanged semantics. Changes to adapter capabilities, fixed filters or geographic reference version restart affected discovery with current fingerprints and invalidate its old traversal evidence. Keep the original source set; an unavailable original source fails configuration validation.
+
+The worker implements these ordinary-import restart paths and carries deferred stale-detail refresh work. Manual-refresh creation and inherited manual cutoffs remain #25 integration work, so manual-refresh restart acceptance is not yet verified.
 
 ### Manual refresh attached to ordinary work
 

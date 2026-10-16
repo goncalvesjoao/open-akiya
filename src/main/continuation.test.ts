@@ -155,7 +155,7 @@ test('rejects active, complete and replacement-area continuations; cancelled que
   ).toThrow('Idempotency key')
 })
 
-test('expired saved cursor restarts inside the new budget and retains committed identities', async () => {
+async function restartCursor(code: string) {
   const base = syntheticAdapter(0)
   let expired = false
   const runtime = new ImportRuntime(':memory:', 0, {
@@ -170,11 +170,7 @@ test('expired saved cursor restarts inside the new budget and retains committed 
               'discovery',
               'https://example.invalid/expired',
             )
-            throw new LocalApiError(
-              409,
-              'CURSOR_EXPIRED',
-              'Saved cursor expired',
-            )
+            throw new LocalApiError(409, code, 'Saved cursor expired')
           }
           const page = await base.discover(input, context)
           return {
@@ -210,7 +206,7 @@ test('expired saved cursor restarts inside the new budget and retains committed 
     continuation: {
       available: true,
       restarted: true,
-      restartReason: 'CURSOR_EXPIRED',
+      restartReason: code,
     },
   })
   const last = runtime.createRequest({
@@ -224,11 +220,20 @@ test('expired saved cursor restarts inside the new budget and retains committed 
   expect(runtime.inspect(last.jobIds[0])).toMatchObject({
     counts: { checked: 0 },
     coverage: { status: 'complete' },
+    reasons: expect.arrayContaining([code]),
+    continuation: { restarted: true, restartReason: code },
   })
+  expect(runtime.inspect(last.jobIds[0]).coverage.caveats).toContain(
+    'Saved cursor expired or invalid; discovery restarted within this job budget',
+  )
   expect(
     runtime.results({ area: initialArea, showUnavailable: true }).listings,
   ).toHaveLength(1)
-})
+}
+test.each(['CURSOR_EXPIRED', 'CURSOR_INVALID'])(
+  'bounded cursor restart preserves explanation: %s',
+  restartCursor,
+)
 
 test('continues failed sources and cancelled pending details while leaving completed sources alone', async () => {
   for (const cancel of [false, true]) {
@@ -341,7 +346,7 @@ test('two workers atomically reuse a terminal progress generation and update eve
   }
 })
 
-test('changed source semantics restart discovery with explanation and disabled scope fails safely', async () => {
+async function restartSemantics(change: string) {
   const directory = mkdtempSync(join(tmpdir(), 'continuation-scope-'))
   const path = join(directory, 'db.sqlite')
   const base = syntheticAdapter(0)
@@ -369,12 +374,17 @@ test('changed source semantics restart discovery with explanation and disabled s
     await runtime.close()
     runtime = new ImportRuntime(path, 0, {
       ...clock,
+      fixedFilters: change === 'filters' ? { residential: false } : undefined,
+      referenceVersion: change === 'reference' ? 'reference-v2' : undefined,
       adapters: [
         {
           ...base,
           capabilities: {
             ...base.capabilities,
-            adapterVersion: 'synthetic-v2',
+            adapterVersion:
+              change === 'adapter'
+                ? 'synthetic-v2'
+                : base.capabilities.adapterVersion,
           },
         },
       ],
@@ -391,6 +401,12 @@ test('changed source semantics restart discovery with explanation and disabled s
     await expect
       .poll(() => runtime.inspect(next.jobIds[0]).state)
       .toBe('succeeded')
+    expect(runtime.inspect(next.jobIds[0]).coverage.caveats).toContain(
+      'Source configuration changed; discovery restarted with current semantics',
+    )
+    expect(runtime.inspect(next.jobIds[0]).scopeKey).not.toBe(
+      runtime.inspect(original.jobIds[0]).scopeKey,
+    )
     expect(
       runtime.results({ area: initialArea, showUnavailable: true }).listings,
     ).toHaveLength(1)
@@ -398,7 +414,11 @@ test('changed source semantics restart discovery with explanation and disabled s
     await runtime.close()
     rmSync(directory, { recursive: true, force: true })
   }
-})
+}
+test.each(['adapter', 'filters', 'reference'])(
+  'changed semantics restart with explanation: %s',
+  restartSemantics,
+)
 
 test('running cancellation after a committed detail preserves progress for explicit continuation', async () => {
   const base = syntheticAdapter(0)
@@ -864,7 +884,7 @@ test('refresh rejection evidence belongs to its source while refresh-only work c
   }
 })
 
-test('changed adapter semantics recheck committed details without duplicating saved offers', async () => {
+async function recheckChangedSemantics(change: string) {
   const directory = mkdtempSync(join(tmpdir(), 'continuation-version-'))
   const path = join(directory, 'db.sqlite')
   const clock = testClock(0)
@@ -896,9 +916,18 @@ test('changed adapter semantics recheck committed details without duplicating sa
   await first.close()
   const changed = {
     ...base,
-    capabilities: { ...base.capabilities, adapterVersion: 'v2' },
+    capabilities: {
+      ...base.capabilities,
+      adapterVersion:
+        change === 'adapter' ? 'v2' : base.capabilities.adapterVersion,
+    },
   }
-  const runtime = new ImportRuntime(path, 0, { ...clock, adapters: [changed] })
+  const runtime = new ImportRuntime(path, 0, {
+    ...clock,
+    adapters: [changed],
+    fixedFilters: change === 'filters' ? { residential: false } : undefined,
+    referenceVersion: change === 'reference' ? 'reference-v2' : undefined,
+  })
   runtimes.push(runtime)
   try {
     const next = runtime.createRequest({
@@ -921,7 +950,11 @@ test('changed adapter semantics recheck committed details without duplicating sa
     await runtime.close()
     rmSync(directory, { recursive: true, force: true })
   }
-})
+}
+test.each(['adapter', 'filters', 'reference'])(
+  'changed semantics recheck saved offers: %s',
+  recheckChangedSemantics,
+)
 
 test('cancellation during tail refresh retains only unfinished tasks after discovery succeeds', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'continuation-tail-'))
@@ -1022,3 +1055,153 @@ test('cancellation during tail refresh retains only unfinished tasks after disco
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test.each([false, true])(
+  'cursor restart retains deferred stale refreshes (%s), host pacing and persisted successful explanation',
+  async (stale) => {
+    const directory = mkdtempSync(join(tmpdir(), 'cursor-intent-'))
+    const path = join(directory, 'db.sqlite')
+    const clock = testClock(0)
+    const offers = ['known-a', 'known-b', 'new'].map((externalId) => ({
+      ...fixtures[0],
+      primarySourceUrl: `https://example.invalid/${externalId}`,
+      sourceRefs: [
+        {
+          ...fixtures[0].sourceRefs[0],
+          externalId,
+          url: `https://example.invalid/${externalId}`,
+        },
+      ],
+    }))
+    const seed = syntheticAdapter(0, offers.slice(0, 2))
+    let runtime = new ImportRuntime(path, 0, { ...clock, adapters: [seed] })
+    runtimes.push(runtime)
+    try {
+      const seeded = runtime.createRequest({
+        area: initialArea,
+        intent: 'import',
+        idempotencyKey: 'seed-intent',
+      })
+      await expect
+        .poll(() => runtime.inspect(seeded.jobIds[0]).stage)
+        .toBe('finished')
+      const saved = runtime.results({
+        area: initialArea,
+        showUnavailable: true,
+      }).listings
+      await runtime.close()
+      let replacement = false
+      const base = syntheticAdapter(0, offers)
+      const attempts: { url: string; at: number }[] = []
+      const options = {
+        ...clock,
+        areaFreshnessMs: 0,
+        detailFreshnessMs: stale ? 0 : 86400000,
+        transport: async (url: string) => {
+          attempts.push({ url, at: clock.now() })
+          return { status: 200 }
+        },
+        adapters: [
+          {
+            ...base,
+            async discover(
+              input: Parameters<typeof base.discover>[0],
+              context: Parameters<typeof base.discover>[1],
+            ) {
+              if (input.cursor) {
+                await context.request(
+                  'discovery',
+                  'https://example.invalid/expired',
+                )
+                throw new LocalApiError(
+                  409,
+                  'CURSOR_INVALID',
+                  'Synthetic invalid cursor',
+                )
+              }
+              const page = await base.discover(input, context)
+              return replacement
+                ? page
+                : {
+                    ...page,
+                    candidates: page.candidates.slice(0, 1),
+                    nextCursor: 'saved',
+                    exhausted: false,
+                  }
+            },
+          },
+        ],
+      }
+      runtime = new ImportRuntime(path, 0, {
+        ...options,
+        discoveryLimit: 1,
+        detailLimit: 1,
+      })
+      runtimes.push(runtime)
+      const first = runtime.createRequest({
+        area: initialArea,
+        intent: 'import',
+        idempotencyKey: 'first-intent',
+      })
+      await expect
+        .poll(() => runtime.inspect(first.jobIds[0]).stage)
+        .toBe('finished')
+      expect(runtime.inspect(first.jobIds[0]).state).toBe('partial')
+      await runtime.close()
+      replacement = true
+      attempts.length = 0
+      runtime = new ImportRuntime(path, 0, { ...options, discoveryLimit: 3 })
+      runtimes.push(runtime)
+      const continued = runtime.createRequest({
+        intent: 'continue',
+        fromJobId: first.jobIds[0],
+        idempotencyKey: 'continued-intent',
+      })
+      await expect
+        .poll(() => runtime.inspect(continued.jobIds[0]).stage)
+        .toBe('finished')
+      const job = runtime.inspect(continued.jobIds[0])
+      expect(job).toMatchObject({
+        state: 'succeeded',
+        budget: { discoveryUsed: 2, detailUsed: stale ? 2 : 1 },
+        counts: { added: 1 },
+        coverage: { status: 'complete' },
+        reasons: ['CURSOR_INVALID'],
+        continuation: {
+          available: false,
+          restarted: true,
+          restartReason: 'CURSOR_INVALID',
+        },
+      })
+      expect(attempts).toHaveLength(stale ? 4 : 3)
+      for (let index = 1; index < attempts.length; index++)
+        expect(
+          attempts[index].at - attempts[index - 1].at,
+        ).toBeGreaterThanOrEqual(2000)
+      const results = runtime.results({
+        area: initialArea,
+        showUnavailable: true,
+      }).listings
+      expect(results).toHaveLength(3)
+      for (const offer of saved) {
+        const result = results.find((listing) => listing.id === offer.id)!
+        if (stale)
+          expect(Date.parse(result.sourceCheckedAt!)).toBeGreaterThan(
+            Date.parse(offer.sourceCheckedAt!),
+          )
+        else expect(result.sourceCheckedAt).toBe(offer.sourceCheckedAt)
+      }
+      await runtime.close()
+      runtime = new ImportRuntime(path, 0, options)
+      runtimes.push(runtime)
+      expect(runtime.inspect(continued.jobIds[0])).toEqual(job)
+      expect(runtime.inspectRequest(continued.id)).toMatchObject({
+        state: 'succeeded',
+        pendingFollowUp: false,
+      })
+    } finally {
+      await runtime.close()
+      rmSync(directory, { recursive: true, force: true })
+    }
+  },
+)

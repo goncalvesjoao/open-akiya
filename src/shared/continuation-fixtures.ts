@@ -106,11 +106,59 @@ const restarted: ImportJob = {
   sources: [
     { sourceId: 'fixture', state: 'running', coverage: 'partial', error: null },
   ],
+  coverage: {
+    ...queued.coverage,
+    caveats: [
+      'Saved cursor expired or invalid; discovery restarted within this job budget',
+    ],
+  },
   reasons: ['CURSOR_EXPIRED'],
   continuation: {
     ...queued.continuation,
     restarted: true,
     restartReason: 'CURSOR_EXPIRED',
+  },
+}
+const restartedPartial: ImportJob = {
+  ...restarted,
+  state: 'partial',
+  stage: 'finished',
+  finishedAt: '2026-10-15T00:01:03Z',
+  budget: { ...restarted.budget, discoveryLimit: 1 },
+  sources: [
+    {
+      sourceId: 'fixture',
+      state: 'partial',
+      coverage: 'partial',
+      error: {
+        code: 'DISCOVERY_BUDGET_EXHAUSTED',
+        message: 'Discovery request budget exhausted',
+        retryable: false,
+      },
+    },
+  ],
+  reasons: [...restarted.reasons, 'DISCOVERY_BUDGET_EXHAUSTED'],
+  continuation: { ...restarted.continuation, available: true },
+}
+const restartedSucceeded: ImportJob = {
+  ...restarted,
+  state: 'succeeded',
+  stage: 'finished',
+  finishedAt: '2026-10-15T00:01:05Z',
+  budget: { ...restarted.budget, discoveryUsed: 2 },
+  sources: [
+    {
+      sourceId: 'fixture',
+      state: 'succeeded',
+      coverage: 'complete',
+      error: null,
+    },
+  ],
+  coverage: {
+    ...restarted.coverage,
+    status: 'complete',
+    lastSuccessfulCheckAt: '2026-10-15T00:01:05Z',
+    freshUntil: '2026-10-16T00:01:05Z',
   },
 }
 const continuedRequest: ImportRequest = {
@@ -141,6 +189,8 @@ export const continuationFixtures = {
   cancelled,
   failed,
   restarted,
+  restartedPartial,
+  restartedSucceeded,
   continuedRequest,
   partialRequest,
 }
