@@ -331,6 +331,8 @@ test('failed refresh preserves the previous listing and successful-check timesta
   let blocked = false
   const runtime = new ImportRuntime(':memory:', 0, {
     ...clock,
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     transport: async () => ({ status: blocked ? 403 : 200 }),
   })
   runtimes.push(runtime)
@@ -574,7 +576,7 @@ test('request cancellation interrupts Retry-After backoff without another transp
   await expect.poll(() => waiting).toBe(true)
   expect(
     await runtime.dispatch('cancelImportRequest', request.id),
-  ).toMatchObject({ state: 'running' })
+  ).toMatchObject({ state: 'cancelled' })
   await expect
     .poll(() => runtime.inspectRequest(request.id).state)
     .toBe('cancelled')

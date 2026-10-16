@@ -16,6 +16,11 @@ import { safeSourceUrl } from '../shared/geography'
 
 app.setName('Open Akiya')
 
+const hiddenTestWindow =
+  !app.isPackaged &&
+  Boolean(process.env.OPEN_AKIYA_TEST_DATA) &&
+  process.env.OPEN_AKIYA_TEST_HIDDEN === '1'
+
 let window: BrowserWindow | null = null
 let worker: Electron.UtilityProcess | null = null
 let sequence = 0
@@ -55,9 +60,17 @@ function call(operation: Operation, input?: unknown): Promise<unknown> {
   })
 }
 function startWorker() {
-  worker = utilityProcess.fork(join(__dirname, 'worker.cjs'), [
-    join(app.getPath('userData'), 'open-akiya.sqlite'),
-  ])
+  worker = utilityProcess.fork(
+    join(__dirname, 'worker.cjs'),
+    [join(app.getPath('userData'), 'open-akiya.sqlite')],
+    {
+      env: {
+        ...process.env,
+        OPEN_AKIYA_TEST_FAST:
+          !app.isPackaged && process.env.OPEN_AKIYA_TEST_DATA ? '1' : '',
+      },
+    },
+  )
   worker.on('message', (reply: WorkerReply) => {
     const request = pending.get(reply.id)
     if (!request) return
@@ -83,12 +96,14 @@ function startWorker() {
   })
 }
 function showWindow() {
+  if (hiddenTestWindow && window && !window.isDestroyed()) return
   if (window && !window.isDestroyed()) {
     window.show()
     window.focus()
     return
   }
   window = new BrowserWindow({
+    show: !hiddenTestWindow,
     width: 1200,
     height: 850,
     minWidth: 640,
@@ -99,6 +114,7 @@ function showWindow() {
       nodeIntegration: false,
       sandbox: true,
       webSecurity: true,
+      backgroundThrottling: !hiddenTestWindow,
     },
   })
   const openExternal = (value: string) => {
@@ -139,6 +155,7 @@ if (!app.requestSingleInstanceLock()) app.quit()
 else {
   app.on('second-instance', showWindow)
   app.whenReady().then(() => {
+    if (hiddenTestWindow) app.dock?.hide()
     mkdirSync(app.getPath('userData'), { recursive: true })
     app.userAgentFallback = `OpenAkiya/${app.getVersion()} (+https://github.com/goncalvesjoao/open-akiya)`
     startWorker()

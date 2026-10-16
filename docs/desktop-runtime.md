@@ -13,13 +13,13 @@ Open Akiya uses Electron, React/TypeScript and embedded SQLite. The renderer is 
 
 ## Jobs and local data
 
-The utility process owns the `node:sqlite` connection. SQLite WAL, foreign keys and transactions retain observations, projections and job progress together. Job areas are immutable. Durable request idempotency keys and a transactionally claimed installation-wide executor lease support synthetic imports without duplicate committed offers. Base intent creates one request and one job; different keys never attach to active jobs. Enabled source capabilities, versions, filters and reference version are frozen in the durable job scope. Lease heartbeats and owner checks prevent another worker from claiming or committing the same live execution.
+The utility process owns the `node:sqlite` connection. SQLite WAL, foreign keys and transactions retain observations, projections and job progress together. Job areas are immutable. Durable request idempotency keys and a transactionally claimed installation-wide executor lease support synthetic imports without duplicate committed offers. Base intent persists its own immutable requested area. Different keys atomically attach to identical or fully covering queued/running jobs when enabled source capabilities, filters and reference semantics match. Partially overlapping circles create separate immutable queued jobs. The attached job retains its covering area, and cancelled jobs accept no new owners. Enabled source capabilities, versions, filters and reference version are frozen in the durable job scope. Lease heartbeats and owner checks prevent another worker from claiming or committing the same live execution.
 
 Closing the window hides the application while imports continue. Launching it again restores the existing window. Explicit Quit stops scheduling and preserves committed progress. Restart recovers interrupted work; cancelled jobs remain cancelled. Work does not execute while the app is fully exited or the computer is asleep.
 
-`src/shared/desktop.ts` defines `createImportRequest`, `inspectImportRequest`, `inspectImport`, `cancelImport`, `cancelImportRequest`, `listImports({state: 'active'})` and `areaResults`. Requests and jobs have separate durable IDs and use the approved #5 DTOs. Both cancellation operations persist intent immediately, stop further source attempts, and preserve committed listings and counters. Running jobs remain running until active work settles; queued jobs cancel before dispatch. Cancellation is idempotent, leaves completed outcomes intact, and propagates to the sole base request. Creation accepts only base `intent: 'import'`; active-work attachment, refresh and continuation policies remain outside this slice. Errors carry a sanitized code, message and retryability. Invalid requests are `INVALID_REQUEST`; unknown IDs are `NOT_FOUND`; conflicting keys are `IDEMPOTENCY_CONFLICT`; disabled sources are `NO_ENABLED_SOURCES`.
+`src/shared/desktop.ts` defines `createImportRequest`, `inspectImportRequest`, `inspectImport`, `cancelImport`, `cancelImportRequest`, `listImports({state: 'active'})` and `areaResults`. Requests and jobs have separate durable IDs and use the approved #5 DTOs. Both cancellation operations persist intent immediately, stop further source attempts, and preserve committed listings and counters. Running jobs remain running until active work settles; queued jobs cancel before dispatch. Request cancellation immediately detaches only that request and retains its cancellation timestamp. Other owners keep shared execution alive; cancelling the last owner requests cooperative job cancellation. Explicit job cancellation propagates to unfinished attached requests. Terminal requests never reopen. Creation accepts base `intent: 'import'` and explicit bounded `intent: 'continue'`; manual refresh remains separate work. Errors carry a sanitized code, message and retryability. Invalid requests are `INVALID_REQUEST`; unknown IDs are `NOT_FOUND`; conflicting keys are `IDEMPOTENCY_CONFLICT`; disabled sources are `NO_ENABLED_SOURCES`.
 
-The synthetic adapter independently discovers, fetches detail and normalizes one fixed offer at latitude 35, longitude 135. Other areas return a successful empty discovery rather than moving that offer. The worker persists actual discovery/detail request counts before dispatch; observation, approved listing projection, committed counts and candidate progress commit atomically. Repeated unchanged content has an `unchanged` count. Saved-data reads never invoke adapters. Saved area results conservatively report unknown coverage; job responses distinguish discovery traversal from required detail work. The scoped checkpoint behavior below applies to adapters with verified date ordering.
+The synthetic adapter independently discovers, fetches detail and normalizes one fixed offer at latitude 35, longitude 135. Other areas return a successful empty discovery rather than moving that offer. The worker persists actual discovery/detail request counts before dispatch; observation, approved listing projection, committed counts and candidate progress commit atomically. Repeated unchanged content has an `unchanged` count. Saved-data reads never invoke adapters. Ordinary imports reuse fresh complete successful covering work and independently reuse recent successful listing details. Area results expose persisted coverage evidence and its actual successful-check times; scoped completed discovery checkpoints support safe date stopping as described below.
 
 Area-results queries use the supplied circle independently of import job input. Verified positions use inclusive geodesic membership, including across the antimeridian; source-provided uncertain positions remain unverified. Saved historical positions lacking nonblank verification evidence or a valid verification timestamp are exposed as unverified source points, while new verified observations must provide both. Municipality membership uses the documented synthetic reference geometry, including groups without representative points. Unknown-location candidates require saved intersecting discovery evidence. Availability is filtered before group counts, and reads retain successful source-check timestamps without collecting or claiming complete coverage.
 
@@ -30,8 +30,7 @@ New request/job/lease tables are additive (`*_v2`); existing listing IDs and sav
 The current app imports fictional sample listings only. The base request/job contracts are implemented; parent #5 has additional child-ticket acceptance work. Outstanding work includes:
 
 - Live source transport, robust field-patch/authoritative-null merging, invalid-observation handling and independent multi-source availability.
-- Cross-job checkpoint verification, fair detail refresh allocation and freshness/containment reuse.
-- Independent request intent, shared-work cancellation, manual-refresh follow-ups, bounded continuation and expired-cursor recovery.
+- Manual-refresh follow-ups.
 - Live municipality reference geometry and address/place lookup. Synthetic unverified pins, municipality summaries and unknown-location associations are implemented.
 - Permitted Tsubata integration, geographic-reference and identity validation, residential eligibility and a bounded live pilot.
 - Windows/macOS validation, installer signing/notarization, release icons and published installers.
@@ -62,17 +61,62 @@ source URLs and `BUDGET_EXHAUSTED`. Cancellation interrupts waits and transports
 Source failures do not prevent remaining enabled sources from running. Successful
 empty discovery is a success; errors without useful saved work are failures;
 useful saved work, saved resumable traversal progress or a mix of successful and failed sources produces partial
-results. Rejected discovery candidates and source limitations never certify complete
-discovery coverage. A completed traversal can retain complete discovery coverage
-while required older-offer detail refresh fails, leaving the job partial. Existing listings and their successful-check times survive failed
-checks. Job inspection reports these outcomes while area results retain
-conservative unknown coverage.
+results. Rejected details and discovery limitations never certify complete source
+coverage. Existing listings and their successful-check times survive failed
+checks. Job inspection and area results retain successful covering evidence and
+source caveats. Discovery coverage remains complete after independent older-offer refresh failures when traversal completed, while the job stays incomplete and cannot establish reusable cache or promote checkpoints.
 
 Private SQLite source traversal records preserve candidates, cursors, completed
 identities, source/version/scope evidence and source outcomes. Retry deadlines and
 host pacing survive restart, alongside the existing durable current-job progress.
-The checkpoint policy retains date evidence with these records for later explicit
-continuations. Bounded continuation and cursor restart remain owned by #23.
+These records retain date ordering evidence across explicit bounded continuations. Invalid cursors discard abandoned traversal dates before replacement discovery.
+
+Known offers relevant to the selected area enter a separate durable refresh queue,
+ordered globally by each source offer's oldest successful check, with unknown
+check times first. Worker configuration `refreshReservation` accepts a fraction
+from 0 to 1 and defaults to 0.25. When both classes are pending and the detail
+budget is at least two, refresh receives at least one attempt and new offers
+retain at least one attempt. The refresh phase runs before discovery so an
+abundant or failing discovery scan cannot starve older offers. Discovery/new
+work runs next; unused new-offer capacity returns to remaining refreshes. The
+existing total detail cap includes every retry, redirect hop and conditional
+attempt in its originating class. Neither reservation nor release enlarges it.
+
+The queue, completed identities, class attempt counts, configured reservation and
+next carried class survive worker restart. A one-attempt job chooses the carried
+class and records the opposite class after each attempted request, including
+failed attempts. Explicit continuation consumes this durable progress. Manual-refresh request
+creation remains #25 integration work; manual known-offer rechecks will use the refresh queue. Ordinary imports reuse fresh known-offer details under the policy below.
+Deferred refreshes remain private saved work, and budget exhaustion is partial.
+
+## Ordinary-import freshness
+
+Worker options `areaFreshnessMs` and `detailFreshnessMs` each default to 86,400,000
+milliseconds (24 hours); zero disables the respective reuse. Exactly at expiry is
+stale. Reuse requires one completed successful circle containing the requested
+circle by great-circle distance, not overlap or an inferred union. Empty successful
+traversals are reusable; unfinished required details, errors and source limitations
+cannot establish reusable coverage. Queued requests re-evaluate cache before source
+work and persist a cached request referencing the original successful covering job.
+Their already-issued queued job remains inspectable as a succeeded zero-work job
+with `CACHE_REUSED` and the original coverage evidence.
+
+Source IDs and adapter/query capabilities, `referenceVersion` (default
+`synthetic-v1`) and `fixedFilters` (default `{ residential: true }`) form frozen
+worker-owned scope semantics. Source fingerprints use canonical ordering; execution
+retains the persisted source order across restart. Show unavailable only
+filters saved results. Changed semantics invalidate area reuse and relevant detail
+reuse; a queued job whose frozen configuration is no longer available fails safely.
+No renderer can supply these worker configuration values.
+
+Successful source observations retain a private semantic fingerprint for independent
+detail reuse across overlapping searches. Reuse preserves listing check times and
+consumes no detail request or checked/updated count. A job's area expiry is capped
+by the earliest required detail expiry, so discovery cannot renew skipped details.
+Failed attempts never replace successful observation evidence or extend coverage.
+Area results retain prior successful coverage after failed refreshes, with persistent
+source caveats; coverage always describes configured synthetic discovery, not real
+inventory. Historical observations without the fingerprint require a new check.
 
 ## Discovery checkpoints
 
@@ -92,8 +136,8 @@ window before stopping strictly below it. It then checks stale saved offers in t
 selected area independently of discovery dates, including offers absent from the
 new-offer pages. These detail checks use the existing counted detail budget and
 oldest successful-check order. Publication ordering never proves older offers
-unchanged. The current 24-hour stale check is the default contract; configurable
-freshness, fair reservation and durable cross-job refresh scheduling remain #22.
+unchanged. The shared configurable freshness and reserved refresh queue described above
+retain old-offer checks independently of discovery stopping.
 
 The final successful job transaction promotes each reliable boundary together with
 the terminal job/request result. Partial, failed, cancelled and limited work cannot
@@ -104,7 +148,7 @@ successful-check times, never checkpoint dates or source cursors. Discovery
 coverage does not certify complete real-world inventory, and unfinished details
 cannot certify a fresh area cache.
 
-Cross-job completion verification remains blocked on #23. Its continuation must
-retain the source traversal's date evidence and exact scope, abandon that evidence
-on cursor invalidation, and promote only after all inherited required work commits.
-The current implementation makes no cross-job completion claim.
+Explicit continuation preserves each source traversal's date evidence and exact
+scope, including completed sources and deferred details. Cursor invalidation or
+source-limitation restart discards abandoned dates. Only a separately completed
+replacement traversal with all required work committed may promote a checkpoint.

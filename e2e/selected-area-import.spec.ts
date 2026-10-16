@@ -34,12 +34,18 @@ test('imports the explicitly selected synthetic area and retains saved results a
       ],
       env: {
         ...process.env,
+        OPEN_AKIYA_TEST_HIDDEN: '1',
         OPEN_AKIYA_TEST_DATA: directory,
         OPEN_AKIYA_LOCATION_SEARCH_URL: endpoint,
       },
     })
     await application.context().route('https://**/*', (route) => route.abort())
     const page = await application.firstWindow()
+    expect(
+      await application.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().every((window) => !window.isVisible()),
+      ),
+    ).toBe(true)
     return { application, page }
   }
   let session = await launch()
@@ -145,6 +151,11 @@ test('imports the explicitly selected synthetic area and retains saved results a
       nodeVisible: 'require' in window || 'process' in window,
     }))
     expect(boundary.nodeVisible).toBe(false)
+    expect(
+      await session.application.evaluate(({ BrowserWindow }) =>
+        BrowserWindow.getAllWindows().every((window) => !window.isVisible()),
+      ),
+    ).toBe(true)
     expect(boundary.methods).toEqual([
       'areaResults',
       'cancelImport',

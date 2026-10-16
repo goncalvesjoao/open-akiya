@@ -13,7 +13,11 @@ test('recovers by keyboard on mobile while map tiles fail', async () => {
       '--host-resolver-rules=MAP tile.openstreetmap.org 127.0.0.1, MAP *.tile.openstreetmap.org 127.0.0.1',
       'out/main/index.cjs',
     ],
-    env: { ...process.env, OPEN_AKIYA_TEST_DATA: directory },
+    env: {
+      ...process.env,
+      OPEN_AKIYA_TEST_HIDDEN: '1',
+      OPEN_AKIYA_TEST_DATA: directory,
+    },
   })
   await application.context().route('https://**/*', (route) =>
     route.fulfill({

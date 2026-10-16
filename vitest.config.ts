@@ -5,8 +5,24 @@ export default defineConfig({
   base: './',
   plugins: [react()],
   test: {
-    include: ['src/**/*.test.{ts,tsx}'],
-    environment: 'jsdom',
-    setupFiles: ['./src/renderer/src/test/setup.ts'],
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'node',
+          include: ['src/**/*.test.ts'],
+          environment: 'node',
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'components',
+          include: ['src/**/*.test.tsx'],
+          environment: 'jsdom',
+          setupFiles: ['./src/renderer/src/test/setup.ts'],
+        },
+      },
+    ],
   },
 })

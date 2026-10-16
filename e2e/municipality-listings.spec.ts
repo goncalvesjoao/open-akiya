@@ -5,16 +5,17 @@ import { join } from 'node:path'
 
 // Leaflet marker placement, focus and Electron external navigation need a browser.
 test('explores municipality summary markers and list-only groups without house pins', async () => {
-  // Ten fixture details are paced at two seconds each. Preserve production
-  // traffic controls and allow the import to reach these later fixtures.
-  test.setTimeout(60000)
   const directory = mkdtempSync(join(tmpdir(), 'akiya-municipality-'))
   const application = await electron.launch({
     args: [
       '--host-resolver-rules=MAP *.tile.openstreetmap.org 127.0.0.1',
       'out/main/index.cjs',
     ],
-    env: { ...process.env, OPEN_AKIYA_TEST_DATA: directory },
+    env: {
+      ...process.env,
+      OPEN_AKIYA_TEST_HIDDEN: '1',
+      OPEN_AKIYA_TEST_DATA: directory,
+    },
   })
   await application.context().route('https://**/*', (route) => route.abort())
   const page = await application.firstWindow()
@@ -26,7 +27,7 @@ test('explores municipality summary markers and list-only groups without house p
     })
     await expect(
       group.getByText('Sample municipality · 2 listings', { exact: true }),
-    ).toBeVisible({ timeout: 30000 })
+    ).toBeVisible()
     await page.getByRole('button', { name: 'Zoom out' }).click()
     const pin = page.getByRole('button', {
       name: 'Municipality summary: Sample municipality · 2 listings',
@@ -85,55 +86,24 @@ test('explores municipality summary markers and list-only groups without house p
         application.evaluate(() => process.env.OPEN_AKIYA_CAPTURED_SOURCE),
       )
       .toBe('https://example.invalid/offers/municipality-source-point-1')
-    await page.getByLabel('Show unavailable', { exact: true }).check()
     await expect(
-      group.getByText('Sample municipality · 3 listings', { exact: true }),
-    ).toBeVisible()
-    await group
-      .getByRole('button', {
-        name: 'Unavailable municipality sample listing',
-        exact: true,
-      })
-      .click()
-    await expect(details).toContainText('Availability: unavailable')
-    await page.getByLabel('Show unavailable', { exact: true }).uncheck()
+      page.getByRole('button', { name: /Pin: .*Unknown-location/ }),
+    ).toHaveCount(0)
     await expect(
-      group.getByText('Sample municipality · 2 listings', { exact: true }),
+      page.getByRole('list', { name: 'Unknown location' }).getByRole('button', {
+        name: 'Unknown-location sample listing',
+        exact: true,
+      }),
     ).toBeVisible()
-    await expect(details).toHaveCount(0)
-    const listOnly = page.getByRole('group', {
-      name: 'Municipality summary: Sample municipality without a point',
-      exact: true,
-    })
-    await expect(listOnly).toContainText('No documented representative point')
-    await listOnly
-      .getByText('Sample municipality without a point · 1 listing', {
-        exact: true,
-      })
-      .click()
-    await listOnly
-      .getByRole('button', {
-        name: 'Municipality sample listing without a point',
-        exact: true,
-      })
-      .click()
-    await expect(details).toContainText(
-      'Municipality sample listing without a point',
-    )
     await expect(
       page.getByRole('button', {
         name: /Municipality summary: Sample municipality without a point ·/,
       }),
     ).toHaveCount(0)
-    await page.screenshot({
-      path: 'test-results/municipality-summary.png',
-      fullPage: true,
-    })
     // Querying a distant area removes groups, including their representative marker.
     await page.getByLabel('Latitude', { exact: true }).fill('36')
     await page.getByRole('button', { name: 'Apply area' }).click()
     await expect(group).toHaveCount(0)
-    await expect(listOnly).toHaveCount(0)
     await expect(
       page.getByRole('button', { name: /Municipality summary:/ }),
     ).toHaveCount(0)

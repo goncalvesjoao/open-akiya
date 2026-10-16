@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -8,66 +9,18 @@ import {
 import { afterEach, expect, test, vi } from 'vitest'
 import ImportControls from './ImportControls'
 import { initialArea } from './listings/query'
+import {
+  runningImportJob as job,
+  queuedImportRequest,
+} from '../../shared/import-fixtures'
 import type { DesktopAPI, Job, ImportRequest } from '../../shared/desktop'
 
-const job: Job = {
-  id: 'fixture-job',
-  area: initialArea,
-  state: 'running',
-  stage: 'discovering',
-  createdAt: '2026-10-15T00:00:00Z',
-  startedAt: '2026-10-15T00:00:01Z',
-  finishedAt: null,
-  scopeKey: 'fixture-scope',
-  cancelRequestedAt: null,
-  counts: {
-    discovered: 0,
-    checked: 0,
-    added: 0,
-    updated: 0,
-    unchanged: 0,
-    rejected: 0,
-  },
-  budget: {
-    discoveryUsed: 0,
-    discoveryLimit: 10,
-    detailUsed: 0,
-    detailLimit: 100,
-  },
-  sources: [
-    { sourceId: 'fixture', state: 'running', coverage: 'unknown', error: null },
-  ],
-  coverage: {
-    status: 'unknown',
-    lastSuccessfulCheckAt: null,
-    freshUntil: null,
-    scopeKey: 'fixture-scope',
-    caveats: [],
-  },
-  reasons: [],
-  continuation: {
-    available: false,
-    fromJobId: null,
-    restarted: false,
-    restartReason: null,
-  },
-  error: null,
-}
 function setup(overrides: Partial<DesktopAPI> = {}) {
   const api: DesktopAPI = {
     searchLocations: vi.fn(),
-    createImportRequest: vi.fn(async (): Promise<ImportRequest> => ({
-      id: 'request',
-      area: initialArea,
-      intent: 'import',
-      disposition: 'created',
-      state: 'queued',
-      jobIds: [job.id],
-      pendingFollowUp: false,
-      createdAt: job.createdAt,
-      finishedAt: null,
-      error: null,
-    })),
+    createImportRequest: vi.fn(async (): Promise<ImportRequest> =>
+      structuredClone(queuedImportRequest),
+    ),
     inspectImportRequest: vi.fn(),
     inspectImport: vi.fn(async () => job),
     cancelImportRequest: vi.fn(),
@@ -138,4 +91,28 @@ test('announces worker failure with a recovery action', async () => {
     'Quit and reopen to recover',
   )
   expect(screen.queryByText('private failure')).not.toBeInTheDocument()
+})
+
+test('refreshes saved results when an import finishes before the active queue is read', async () => {
+  vi.useFakeTimers()
+  try {
+    setup()
+    const settled = vi.fn()
+    await act(async () => {
+      render(<ImportControls area={initialArea} onSettled={settled} />)
+    })
+    settled.mockClear()
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Import sample listings' }),
+      )
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(settled).toHaveBeenCalledTimes(1)
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
 })
