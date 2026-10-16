@@ -88,11 +88,14 @@ function adapters(state: { phase: number }): SourceAdapter[] {
 
 test('proven duplicate sources share one attributed projection with independent withdrawal and failed-check evidence', async () => {
   const state = { phase: 0 }
-  const clock = testClock(Date.parse('2026-10-16T00:00:00Z'))
+  let clock = Date.parse('2026-10-16T00:00:00Z')
   const runtime = new ImportRuntime(join(directory, 'duplicate.sqlite'), 1, {
     ...storageOptions,
     adapters: adapters(state),
-    ...clock,
+    now: () => clock,
+    wait: async (milliseconds) => {
+      clock += milliseconds
+    },
   })
   runtimes.push(runtime)
   expect(await imported(runtime)).toMatchObject({
@@ -109,7 +112,7 @@ test('proven duplicate sources share one attributed projection with independent 
     sourceCheckedAt: '2026-10-16T00:00:02.000Z',
   })
   state.phase = 1
-  clock.advance(86400000)
+  clock += 86400000
   await imported(runtime)
   expect(
     runtime.results({ ...query, showUnavailable: false }).listings,
@@ -120,14 +123,14 @@ test('proven duplicate sources share one attributed projection with independent 
   })
   const supported = runtime.results(query).listings[0]
   state.phase = 2
-  clock.advance(86400000)
+  clock += 86400000
   expect(await imported(runtime)).toMatchObject({
     state: 'failed',
     counts: { rejected: 2 },
   })
   expect(runtime.results(query).listings[0]).toEqual(supported)
   state.phase = 3
-  clock.advance(86400000)
+  clock += 86400000
   await imported(runtime)
   expect(
     runtime.results({ ...query, showUnavailable: false }).listings,
@@ -338,11 +341,11 @@ test('a secondary successful check cannot freshen retained primary facts after p
         : primary.normalize(evidence)
     },
   }
-  const clock = testClock(Date.parse('2026-10-16T00:00:00Z'))
+  let clock = Date.parse('2026-10-16T00:00:00Z')
   const runtime = new ImportRuntime(
     join(directory, 'primary-failure.sqlite'),
     1,
-    { ...storageOptions, adapters: sources, ...clock },
+    { ...storageOptions, adapters: sources, now: () => clock },
   )
   runtimes.push(runtime)
   await imported(runtime)
@@ -350,7 +353,7 @@ test('a secondary successful check cannot freshen retained primary facts after p
   await imported(runtime)
   const priorCheck = runtime.results(query).listings[0].sourceCheckedAt
   fail = true
-  clock.advance(86400000)
+  clock += 86400000
   await imported(runtime)
   expect(runtime.results(query).listings[0]).toMatchObject({
     availability: 'available',

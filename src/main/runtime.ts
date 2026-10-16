@@ -75,6 +75,7 @@ type Progress = {
   refreshReservation?: number
   refreshAttemptLimit?: number
   rejectionError?: ApiError
+  rejectionErrors?: Record<string, ApiError>
   visitedCursors?: string[]
   oldestDetailCheckAt?: number
 }
@@ -525,7 +526,11 @@ export class ImportRuntime {
         const pending =
           progress.candidateIndex < progress.candidates.length ||
           !progress.exhausted ||
-          progress.limitation !== null
+          progress.limitation !== null ||
+          [
+            ...(progress.refresh ?? []).slice(progress.refreshIndex ?? 0),
+            ...(progress.deferredRefresh ?? []),
+          ].some((task) => task.sourceIndex === index)
         return pending
           ? [
               [
@@ -598,29 +603,31 @@ export class ImportRuntime {
             'Saved source configuration is unavailable',
           )
         let restarted = false
-        const sources = scope.sources.map(
-          (source: { sourceId: string }, index: number) => {
-            const capabilities = this.adapters.find(
-              (adapter) => adapter.capabilities.sourceId === source.sourceId,
-            )!.capabilities
-            if (JSON.stringify(source) !== JSON.stringify(capabilities)) {
-              restarted = true
-              const saved = this.savedSources(original)[source.sourceId]
-              pending[source.sourceId] = {
-                sourceIndex: index,
-                cursor: null,
-                candidates: [],
-                candidateIndex: 0,
-                exhausted: false,
-                limitation: null,
-                discovered: saved?.discovered ?? [],
-                completed: saved?.completed ?? [],
-                rejectionError: saved?.rejectionError,
-              }
+        const changedSources = new Set<string>()
+        const sources = scope.sources.map((source: { sourceId: string }) => {
+          const capabilities = this.adapters.find(
+            (adapter) => adapter.capabilities.sourceId === source.sourceId,
+          )!.capabilities
+          if (JSON.stringify(source) !== JSON.stringify(capabilities)) {
+            restarted = true
+            changedSources.add(source.sourceId)
+            const saved = this.savedSources(original)[source.sourceId]
+            pending[source.sourceId] = {
+              sourceIndex: original.sources.findIndex(
+                (savedSource) => savedSource.sourceId === source.sourceId,
+              ),
+              cursor: null,
+              candidates: [],
+              candidateIndex: 0,
+              exhausted: false,
+              limitation: null,
+              discovered: saved?.discovered ?? [],
+              completed: saved?.completed ?? [],
+              rejectionError: saved?.rejectionError,
             }
-            return capabilities
-          },
-        )
+          }
+          return capabilities
+        })
         const continuedScope = JSON.stringify({ ...scope, sources })
         const scopeKey = createHash('sha256')
           .update(continuedScope)
@@ -669,6 +676,51 @@ export class ImportRuntime {
           exhausted: false,
           limitation: null,
           resumeSources: pending,
+          detailClassUsed: { new: 0, refresh: 0 },
+          refreshAttemptLimit: undefined,
+          refresh: previous.refresh
+            ? [
+                ...previous.refresh.slice(previous.refreshIndex ?? 0),
+                ...(previous.deferredRefresh ?? []),
+              ]
+            : undefined,
+          refreshIndex: 0,
+          deferredRefresh: [],
+        }
+        if (changedSources.size) {
+          const retain = (identity: string) =>
+            !identity.startsWith('[') ||
+            !changedSources.has(JSON.parse(identity)[0])
+          progress.completed = progress.completed.filter(retain)
+          for (const saved of Object.values(pending))
+            saved.completed = saved.completed.filter(retain)
+          const refreshed: Progress = {
+            ...progress,
+            refresh: undefined,
+            reusedRefresh: undefined,
+            savedBySource: {},
+          }
+          this.prepareRefresh(job, refreshed)
+          progress.refresh = [
+            ...(progress.refresh ?? []).filter(
+              (task) =>
+                !changedSources.has(job.sources[task.sourceIndex].sourceId),
+            ),
+            ...(refreshed.refresh ?? []).filter((task) =>
+              changedSources.has(job.sources[task.sourceIndex].sourceId),
+            ),
+          ]
+          progress.refreshIndex = 0
+          progress.reusedRefresh = (previous.reusedRefresh ?? []).filter(
+            (task) =>
+              !changedSources.has(job.sources[task.sourceIndex].sourceId),
+          )
+          for (const sourceId of changedSources)
+            if (progress.rejectionErrors)
+              delete progress.rejectionErrors[sourceId]
+          for (const saved of Object.values(pending))
+            if (changedSources.has(job.sources[saved.sourceIndex].sourceId))
+              saved.rejectionError = undefined
         }
         this.db
           .prepare('INSERT INTO import_jobs_v2 VALUES (?,?,?,?,?)')
@@ -713,7 +765,8 @@ export class ImportRuntime {
       job.stage = 'finished'
       job.finishedAt = this.time()
       job.sources.forEach((source) => {
-        source.state = 'cancelled'
+        if (source.state === 'queued' || source.state === 'running')
+          source.state = 'cancelled'
       })
     }
     this.save(job)
@@ -1447,6 +1500,7 @@ export class ImportRuntime {
             throw error
           job.counts.rejected++
           source.error = safeError(error)
+          ;(progress.rejectionErrors ??= {})[source.sourceId] = source.error
         }
       } else {
         job.counts.rejected++
@@ -1455,6 +1509,7 @@ export class ImportRuntime {
           message: 'Source listing could not be parsed',
           retryable: false,
         }
+        ;(progress.rejectionErrors ??= {})[source.sourceId] = source.error
       }
       progress.completed.push(identity)
       advance()
@@ -1511,7 +1566,11 @@ export class ImportRuntime {
     }
     this.saveProgress(job, progress)
   }
-  private upgradeProgress(job: ImportJob, progress: Progress, adapters: SourceAdapter[]) {
+  private upgradeProgress(
+    job: ImportJob,
+    progress: Progress,
+    adapters: SourceAdapter[],
+  ) {
     // Old progress keys omitted transaction type. Resolve committed offers from
     // their migrated keys, so a repeated candidate after restart stays checked
     // without suppressing a distinct sale/rental variant.
@@ -1716,8 +1775,10 @@ export class ImportRuntime {
             )
       await this.refresh(job, progress, reservation)
       for (; progress.sourceIndex < adapters.length;) {
-        const adapter = adapters[progress.sourceIndex]
         const source = job.sources[progress.sourceIndex]
+        const adapter = adapters.find(
+          (adapter) => adapter.capabilities.sourceId === source.sourceId,
+        )!
         if (job.continuation.fromJobId && source.state === 'succeeded') {
           progress.sourceIndex++
           this.saveProgress(job, progress)
@@ -1734,15 +1795,40 @@ export class ImportRuntime {
             job.continuation.restarted = true
             job.continuation.restartReason = 'SOURCE_LIMITATION'
           }
-          Object.assign(progress, {
-            ...resume,
-            resumeSources: progress.resumeSources,
-          })
+          for (const key of [
+            'sourceIndex',
+            'cursor',
+            'candidates',
+            'candidateIndex',
+            'exhausted',
+            'limitation',
+            'sourceSaved',
+            'rejectionError',
+            'visitedCursors',
+          ] as const) {
+            Object.assign(progress, { [key]: resume[key] })
+          }
+          progress.discovered = [
+            ...new Set([...progress.discovered, ...resume.discovered]),
+          ]
+          progress.completed = [
+            ...new Set([...progress.completed, ...resume.completed]),
+          ]
+          progress.oldestDetailCheckAt = Math.min(
+            progress.oldestDetailCheckAt ?? Infinity,
+            resume.oldestDetailCheckAt ?? Infinity,
+          )
           this.saveProgress(job, progress)
         }
-        progress.sourceSaved = Math.max(progress.sourceSaved ?? 0, progress.savedBySource?.[progress.sourceIndex] ?? 0)
+        progress.sourceSaved = Math.max(
+          progress.sourceSaved ?? 0,
+          progress.savedBySource?.[progress.sourceIndex] ?? 0,
+        )
         source.state = 'running'
-        source.error = progress.rejectionError ?? source.error
+        source.error =
+          progress.rejectionErrors?.[source.sourceId] ??
+          progress.rejectionError ??
+          source.error
         const context = this.context(job, adapter, progress)
         try {
           if (adapter.capabilities.geography === 'unsupported')

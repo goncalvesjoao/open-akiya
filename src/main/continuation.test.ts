@@ -682,3 +682,243 @@ test.each(['normalization', 'validation'] as const)(
     ).toHaveLength(1)
   },
 )
+
+test('bounded generations alternate detail classes and retain the oldest omitted refresh tasks', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'continuation-fair-'))
+  const path = join(directory, 'db.sqlite')
+  const clock = testClock(0)
+  const offer = (externalId: string) => ({
+    ...fixtures[0],
+    id: externalId,
+    sourceRefs: [
+      {
+        ...fixtures[0].sourceRefs[0],
+        externalId,
+        url: `https://example.invalid/${externalId}`,
+      },
+    ],
+    primarySourceUrl: `https://example.invalid/${externalId}`,
+  })
+  const known = ['old-a', 'old-b', 'old-c'].map(offer)
+  const seed = new ImportRuntime(path, 0, {
+    ...clock,
+    adapters: [syntheticAdapter(0, known)],
+  })
+  const seeded = seed.createRequest({
+    area: initialArea,
+    intent: 'import',
+    idempotencyKey: 'seed',
+  })
+  await expect.poll(() => seed.inspect(seeded.jobIds[0]).stage).toBe('finished')
+  await seed.close()
+  const base = syntheticAdapter(0, [
+    ...known,
+    ...['new-a', 'new-b', 'new-c'].map(offer),
+  ])
+  const checked: string[] = []
+  const runtime = new ImportRuntime(path, 0, {
+    ...clock,
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    detailLimit: 1,
+    adapters: [
+      {
+        ...base,
+        async discover(input, context) {
+          const page = await base.discover(input, context)
+          return {
+            ...page,
+            candidates: page.candidates.filter((candidate) =>
+              candidate.externalId.startsWith('new-'),
+            ),
+          }
+        },
+      },
+    ],
+    transport: async (url) => {
+      if (!url.includes('/discovery')) checked.push(url.split('/').at(-1)!)
+      return { status: 200 }
+    },
+  })
+  runtimes.push(runtime)
+  try {
+    let request = runtime.createRequest({
+      area: initialArea,
+      intent: 'import',
+      idempotencyKey: 'mixed',
+    })
+    for (let i = 0; i < 6; i++) {
+      await expect
+        .poll(() => runtime.inspect(request.jobIds[0]).stage)
+        .toBe('finished')
+      const job = runtime.inspect(request.jobIds[0])
+      expect(job.budget.detailUsed).toBe(1)
+      if (i < 5) {
+        expect(job.continuation.available).toBe(true)
+        request = runtime.createRequest({
+          intent: 'continue',
+          fromJobId: job.id,
+          idempotencyKey: `next-${i}`,
+        })
+      } else
+        expect(job).toMatchObject({
+          state: 'succeeded',
+          continuation: { available: false },
+        })
+    }
+    expect(checked).toEqual([
+      'old-a',
+      'new-a',
+      'old-b',
+      'new-b',
+      'old-c',
+      'new-c',
+    ])
+  } finally {
+    await runtime.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('refresh rejection evidence belongs to its source while refresh-only work continues', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'continuation-refresh-'))
+  const path = join(directory, 'db.sqlite')
+  const clock = testClock(0)
+  const adapters = ['first', 'second'].map((sourceId) =>
+    syntheticAdapter(0, [
+      {
+        ...fixtures[0],
+        sourceRefs: [{ ...fixtures[0].sourceRefs[0], sourceId }],
+      },
+    ]),
+  )
+  const seed = new ImportRuntime(path, 0, { ...clock, adapters })
+  const seeded = seed.createRequest({
+    area: initialArea,
+    intent: 'import',
+    idempotencyKey: 'seed',
+  })
+  await expect.poll(() => seed.inspect(seeded.jobIds[0]).stage).toBe('finished')
+  await seed.close()
+  let discoveries = 0
+  const runtime = new ImportRuntime(path, 0, {
+    ...clock,
+    adapters: adapters.map((base) => ({
+      ...base,
+      async discover(input, context) {
+        discoveries++
+        const page = await base.discover(input, context)
+        return { ...page, candidates: [] }
+      },
+      normalize(evidence) {
+        return base.capabilities.sourceId === 'second'
+          ? {
+              kind: 'rejected' as const,
+              error: {
+                code: 'PARSE_ERROR' as const,
+                message: 'Rejected refresh',
+                retryable: false,
+              },
+            }
+          : base.normalize(evidence)
+      },
+    })),
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    detailLimit: 1,
+  })
+  runtimes.push(runtime)
+  try {
+    const request = runtime.createRequest({
+      area: initialArea,
+      intent: 'import',
+      idempotencyKey: 'refresh',
+    })
+    await expect
+      .poll(() => runtime.inspect(request.jobIds[0]).stage)
+      .toBe('finished')
+    const original = runtime.inspect(request.jobIds[0])
+    expect(original.continuation.available).toBe(true)
+    const next = runtime.createRequest({
+      intent: 'continue',
+      fromJobId: original.id,
+      idempotencyKey: 'continue-refresh',
+    })
+    await expect
+      .poll(() => runtime.inspect(next.jobIds[0]).stage)
+      .toBe('finished')
+    expect(runtime.inspect(next.jobIds[0])).toMatchObject({
+      budget: { discoveryUsed: 0, detailUsed: 1 },
+      counts: { rejected: 1 },
+      continuation: { available: false },
+      sources: [
+        { sourceId: 'first', state: 'succeeded', error: null },
+        { sourceId: 'second', error: { code: 'PARSE_ERROR' } },
+      ],
+    })
+    expect(discoveries).toBe(2)
+    expect(runtime.inspect(original.id)).toEqual(original)
+  } finally {
+    await runtime.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('changed adapter semantics recheck committed details without duplicating saved offers', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'continuation-version-'))
+  const path = join(directory, 'db.sqlite')
+  const clock = testClock(0)
+  const offers = ['first', 'second'].map((externalId) => ({
+    ...fixtures[0],
+    sourceRefs: [
+      {
+        ...fixtures[0].sourceRefs[0],
+        externalId,
+        url: `https://example.invalid/${externalId}`,
+      },
+    ],
+    primarySourceUrl: `https://example.invalid/${externalId}`,
+  }))
+  const base = syntheticAdapter(0, offers)
+  const first = new ImportRuntime(path, 0, {
+    ...clock,
+    detailLimit: 1,
+    adapters: [base],
+  })
+  const request = first.createRequest({
+    area: initialArea,
+    intent: 'import',
+    idempotencyKey: 'initial',
+  })
+  await expect
+    .poll(() => first.inspect(request.jobIds[0]).stage)
+    .toBe('finished')
+  await first.close()
+  const changed = {
+    ...base,
+    capabilities: { ...base.capabilities, adapterVersion: 'v2' },
+  }
+  const runtime = new ImportRuntime(path, 0, { ...clock, adapters: [changed] })
+  runtimes.push(runtime)
+  try {
+    const next = runtime.createRequest({
+      intent: 'continue',
+      fromJobId: request.jobIds[0],
+      idempotencyKey: 'version',
+    })
+    await expect
+      .poll(() => runtime.inspect(next.jobIds[0]).stage)
+      .toBe('finished')
+    expect(runtime.inspect(next.jobIds[0])).toMatchObject({
+      state: 'succeeded',
+      counts: { checked: 2, added: 1 },
+      budget: { detailUsed: 2 },
+    })
+    expect(
+      runtime.results({ area: initialArea, showUnavailable: true }).listings,
+    ).toHaveLength(2)
+  } finally {
+    await runtime.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
