@@ -136,7 +136,7 @@ Full shared inspection/request fixtures for this subset are in `src/shared/conti
     "scopeKey": "fixture-scope-v1",
     "caveats": ["Discovery budget exhausted; saved results retained"]
   },
-  "reasons": ["DISCOVERY_BUDGET_EXHAUSTED"],
+  "reasons": ["BUDGET_EXHAUSTED"],
   "continuation": {
     "available": true,
     "fromJobId": null,
@@ -213,7 +213,9 @@ If adapter discovery rejects saved progress, `inspectImport("job-2")` returns th
 }
 ```
 
-The failed cursor request consumed one discovery attempt; restarting does not reset remaining budget. Invalid cursors use `CURSOR_INVALID` identically. Preserve saved offers and fresh details unless the inherited request is manual refresh. Incomplete old traversal cannot establish coverage; only the replacement traversal can complete it. Explain the restart in the UI even if the replacement later succeeds.
+The failed cursor request consumed one discovery attempt; restarting does not reset remaining budget. Invalid cursors use `CURSOR_INVALID` identically. Preserve saved offers and fresh details unless the inherited request is manual refresh. Incomplete old traversal cannot establish coverage; only the replacement traversal can complete it. Persist the restart flags, reasons and caveats through later continuations and successful replacement completion so the UI can explain the restart after reconnecting. Reset date-order evidence from the abandoned traversal; independently established completed checkpoint boundaries remain valid under unchanged semantics. Changes to adapter capabilities, fixed filters or geographic reference version restart affected discovery with current fingerprints and invalidate its old traversal evidence. Keep the original source set; an unavailable original source fails configuration validation.
+
+The worker implements restart paths for ordinary imports and inherited manual-refresh intent. It carries deferred rechecks and the original refresh cutoff across bounded continuations and database reopen. Successful checks since that cutoff remain reusable even after ordinary detail freshness expires. Both cursor failures and exhausted replacement work have deterministic verification in `src/main/cursor-manual.test.ts`.
 
 ### Manual refresh attached to ordinary work
 

@@ -152,3 +152,9 @@ Explicit continuation preserves each source traversal's date evidence and exact
 scope, including completed sources and deferred details. Cursor invalidation or
 source-limitation restart discards abandoned dates. Only a separately completed
 replacement traversal with all required work committed may promote a checkpoint.
+
+## Cursor restart
+
+Continued ordinary imports restart typed `CURSOR_EXPIRED` and `CURSOR_INVALID` discovery within the remaining job budget. The rejected request remains charged, saved offers keep their identities, and fresh details remain reusable. Deferred stale-detail work survives the restart. Changed adapter, filter or geographic reference semantics restart affected saved sources with current fingerprints; an unavailable saved source fails configuration validation. Abandoned date-order evidence cannot establish a checkpoint. Restart flags, reasons and caveats persist through later successful continuation and database reopen. Shared running, exhausted and successful examples are in `src/shared/continuation-fixtures.ts`.
+
+Manual-refresh cursor restart retains the original request cutoff and deferred rechecks across exhausted bounded jobs and database reopen. Explicit continuation reuses successful checks since that cutoff, even when ordinary detail freshness has since expired. Both typed cursor failures have deterministic worker API verification in `src/main/cursor-manual.test.ts`.

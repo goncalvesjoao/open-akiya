@@ -822,13 +822,21 @@ export class ImportRuntime {
             'CONFIGURATION_ERROR',
             'Saved source configuration is unavailable',
           )
+        const currentSemantics = this.semantics()
+        const sharedSemanticsChanged =
+          JSON.stringify(scope.filters) !==
+            JSON.stringify(currentSemantics.filters) ||
+          scope.referenceVersion !== currentSemantics.referenceVersion
         let restarted = false
         const changedSources = new Set<string>()
         const sources = scope.sources.map((source: { sourceId: string }) => {
           const capabilities = this.adapters.find(
             (adapter) => adapter.capabilities.sourceId === source.sourceId,
           )!.capabilities
-          if (JSON.stringify(source) !== JSON.stringify(capabilities)) {
+          if (
+            sharedSemanticsChanged ||
+            JSON.stringify(source) !== JSON.stringify(capabilities)
+          ) {
             restarted = true
             changedSources.add(source.sourceId)
             const saved = this.savedSources(original)[source.sourceId]
@@ -848,7 +856,11 @@ export class ImportRuntime {
           }
           return capabilities
         })
-        const continuedScope = JSON.stringify({ ...scope, sources })
+        const continuedScope = JSON.stringify({
+          ...scope,
+          ...currentSemantics,
+          sources,
+        })
         const scopeKey = createHash('sha256')
           .update(continuedScope)
           .digest('hex')
@@ -873,17 +885,51 @@ export class ImportRuntime {
           budget: { ...this.limits, discoveryUsed: 0, detailUsed: 0 },
           sources: original.sources.map((source) =>
             pending[source.sourceId]
-              ? { ...source, state: 'queued', error: null }
+              ? {
+                  ...source,
+                  state: 'queued',
+                  coverage: changedSources.has(source.sourceId)
+                    ? 'partial'
+                    : source.coverage,
+                  error: null,
+                }
               : source,
           ),
-          coverage: { ...original.coverage, status: 'partial', scopeKey },
-          reasons: restarted ? ['SOURCE_CONFIGURATION_CHANGED'] : [],
+          coverage: {
+            ...original.coverage,
+            status: 'partial',
+            scopeKey,
+            caveats: [
+              ...new Set([
+                ...original.coverage.caveats,
+                ...(restarted
+                  ? [
+                      'Source configuration changed; discovery restarted with current semantics',
+                    ]
+                  : []),
+              ]),
+            ],
+          },
+          reasons: [
+            ...new Set([
+              ...original.reasons.filter((reason) =>
+                [
+                  'CURSOR_EXPIRED',
+                  'CURSOR_INVALID',
+                  'SOURCE_CONFIGURATION_CHANGED',
+                ].includes(reason),
+              ),
+              ...(restarted ? ['SOURCE_CONFIGURATION_CHANGED'] : []),
+            ]),
+          ],
           error: null,
           continuation: {
             available: false,
             fromJobId,
-            restarted,
-            restartReason: restarted ? 'SOURCE_CONFIGURATION_CHANGED' : null,
+            restarted: restarted || original.continuation.restarted,
+            restartReason: restarted
+              ? 'SOURCE_CONFIGURATION_CHANGED'
+              : original.continuation.restartReason,
           },
         }
         const previous: Progress = JSON.parse(String(row.progress))
@@ -2101,13 +2147,13 @@ export class ImportRuntime {
           source.error
         const context = this.context(job, adapter, progress)
         const ordering = adapter.capabilities.dateOrdering
+        const reliable =
+          !!ordering &&
+          ordering.descendingVerified === true &&
+          !!ordering.evidence.trim() &&
+          Number.isSafeInteger(ordering.overlapSeconds) &&
+          ordering.overlapSeconds >= 0
         if (!progress.dates) {
-          const reliable =
-            !!ordering &&
-            ordering.descendingVerified === true &&
-            !!ordering.evidence.trim() &&
-            Number.isSafeInteger(ordering.overlapSeconds) &&
-            ordering.overlapSeconds >= 0
           const checkpoint = reliable
             ? this.db
                 .prepare(
@@ -2171,17 +2217,20 @@ export class ImportRuntime {
                   progress.limitation = null
                   progress.discoveryComplete = false
                   progress.dates = {
-                    reliable: progress.dates!.reliable,
+                    reliable,
                     newestAt: null,
                     lastAt: null,
                     stopBefore: progress.dates!.stopBefore,
                   }
                   job.continuation.restarted = true
                   job.continuation.restartReason = error.code
-                  job.reasons.push(error.code)
-                  job.coverage.caveats.push(
-                    'Saved cursor expired or invalid; discovery restarted within this job budget',
-                  )
+                  job.reasons = [...new Set([...job.reasons, error.code])]
+                  job.coverage.caveats = [
+                    ...new Set([
+                      ...job.coverage.caveats,
+                      'Saved cursor expired or invalid; discovery restarted within this job budget',
+                    ]),
+                  ]
                   this.transaction(() => {
                     this.ensure(job)
                     this.saveProgress(job, progress)

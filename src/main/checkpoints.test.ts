@@ -419,9 +419,9 @@ test('completed bounded continuations promote the inherited newest date only aft
   })
 })
 
-test('invalid saved cursor abandons its newest date before a separately completed replacement promotes', async () => {
+async function replaceInvalidCursorEvidence(oldDate: string | null) {
   const s = scenario({ discoveryLimit: 1 })
-  s.dates(['2026-10-20T00:00:00Z', '2026-10-01T00:00:00Z'])
+  s.dates([oldDate, '2026-10-01T00:00:00Z'])
   const first = await s.run()
   const discover = s.adapter.discover
   let invalidated = false
@@ -474,7 +474,11 @@ test('invalid saved cursor abandons its newest date before a separately complete
     state: 'succeeded',
     budget: { discoveryUsed: 3 },
   })
-})
+}
+test.each(['2026-10-20T00:00:00Z', null])(
+  'invalid cursor abandons old date evidence: %s',
+  replaceInvalidCursorEvidence,
+)
 
 test('a continuation retains completed source boundaries while another source finishes later', async () => {
   const s = scenario()
