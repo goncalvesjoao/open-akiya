@@ -114,7 +114,7 @@ test('overlap discovers again but reuses recent details without renewing their a
   })
 })
 
-test('queued requests re-evaluate covering success before any source request', async () => {
+test('contained requests attach to queued covering work without extra source requests', async () => {
   const clock = testClock(Date.parse('2026-10-16T00:00:00Z'))
   let calls = 0
   const runtime = new ImportRuntime(join(directory, 'queue.sqlite'), 0, {
@@ -132,7 +132,7 @@ test('queued requests re-evaluate covering success before any source request', a
     .poll(() => runtime.inspectRequest(queued.id).state)
     .toBe('succeeded')
   expect(runtime.inspectRequest(queued.id)).toMatchObject({
-    disposition: 'cached',
+    disposition: 'attached',
     jobIds: first.jobIds,
   })
   expect(calls).toBe(2)

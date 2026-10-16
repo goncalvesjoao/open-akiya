@@ -35,7 +35,7 @@ function identifier(value: unknown): string {
     invalid('Invalid identifier')
   return value
 }
-const active = (job: ImportJob) =>
+const active = (job: Pick<ImportJob, 'state'>) =>
   job.state === 'queued' || job.state === 'running'
 const coverage = (scopeKey: string | null): Coverage => ({
   status: 'unknown',
@@ -95,6 +95,7 @@ export class ImportRuntime {
   private readonly transportQueue = { tail: Promise.resolve() }
   private stopping = false
   private executing = false
+  private executingJobId: string | undefined
   private closed = false
   private timer: ReturnType<typeof setTimeout> | undefined
   private heartbeat: ReturnType<typeof setInterval> | undefined
@@ -283,18 +284,42 @@ export class ImportRuntime {
       )
       .run(job.state, JSON.stringify(job), JSON.stringify(job), job.id)
     const rows = this.db
-      .prepare('SELECT data FROM import_requests_v2 WHERE job_id=?')
+      .prepare('SELECT id,data FROM import_requests_v2 WHERE job_id=?')
       .all(job.id)
     for (const row of rows) {
       const request: ImportRequest = JSON.parse(String(row.data))
+      if (!active(request)) continue
       request.state = job.state
       request.finishedAt = job.finishedAt
       request.error = job.error
       this.db
-        .prepare('UPDATE import_requests_v2 SET data=? WHERE id=?')
-        .run(JSON.stringify(request), request.id)
+        .prepare(
+          "UPDATE import_requests_v2 SET data=? WHERE id=? AND json_extract(data,'$.state') IN ('queued','running')",
+        )
+        .run(JSON.stringify(request), row.id)
     }
   }
+  private coveringJob(scope: string): ImportJob | undefined {
+    const { area: requestedArea, ...requestedSemantics } = JSON.parse(scope)
+    for (const job of this.activeJobs()) {
+      if (job.cancelRequestedAt) continue
+      const { area: coveringArea, ...semantics } = JSON.parse(
+        String(
+          this.db
+            .prepare('SELECT scope FROM import_jobs_v2 WHERE id=?')
+            .get(job.id)!.scope,
+        ),
+      )
+      if (
+        JSON.stringify(semantics) === JSON.stringify(requestedSemantics) &&
+        distanceMetres(coveringArea.center, requestedArea.center) +
+          requestedArea.radiusKm * 1000 <=
+          coveringArea.radiusKm * 1000 + 1e-8
+      )
+        return job
+    }
+  }
+
   createRequest(input: unknown): ImportRequest {
     if (
       !record(input) ||
@@ -350,7 +375,8 @@ export class ImportRuntime {
       }
       const scope = JSON.stringify(this.scope(area))
       const scopeKey = createHash('sha256').update(scope).digest('hex')
-      const job: ImportJob = {
+      const covering = this.coveringJob(scope)
+      const job: ImportJob = covering ?? {
         id: randomUUID(),
         area,
         scopeKey,
@@ -404,23 +430,24 @@ export class ImportRuntime {
         id: randomUUID(),
         area,
         intent: 'import',
-        state: 'queued',
-        disposition: 'created',
+        state: job.state,
+        disposition: covering ? 'attached' : 'created',
         jobIds: [job.id],
         pendingFollowUp: false,
-        createdAt: job.createdAt,
+        createdAt: this.time(),
         finishedAt: null,
         error: null,
       }
-      this.db
-        .prepare('INSERT INTO import_jobs_v2 VALUES (?,?,?,?,?)')
-        .run(
-          job.id,
-          job.state,
-          JSON.stringify(job),
-          scope,
-          JSON.stringify(progress),
-        )
+      if (!covering)
+        this.db
+          .prepare('INSERT INTO import_jobs_v2 VALUES (?,?,?,?,?)')
+          .run(
+            job.id,
+            job.state,
+            JSON.stringify(job),
+            scope,
+            JSON.stringify(progress),
+          )
       this.db
         .prepare('INSERT INTO import_requests_v2 VALUES (?,?,?,?,?)')
         .run(request.id, key, semantic, job.id, JSON.stringify(request))
@@ -429,26 +456,53 @@ export class ImportRuntime {
     this.schedule()
     return result
   }
-  cancel(input: unknown): ImportJob {
-    const job = this.transaction(() => {
-      const job = this.inspect(input)
-      if (!active(job)) return job
-      job.cancelRequestedAt ??= this.time()
-      if (!job.reasons.includes('USER_CANCELLED'))
-        job.reasons.push('USER_CANCELLED')
-      if (job.state === 'queued') {
-        job.state = 'cancelled'
-        job.stage = 'finished'
-        job.finishedAt = this.time()
-        job.sources.forEach((source) => {
-          source.state = 'cancelled'
-        })
-      }
-      this.save(job)
-      return job
-    })
-    if (job.state === 'running') this.controller?.abort()
+  private requestJobCancellation(job: ImportJob): ImportJob {
+    if (!active(job)) return job
+    job.cancelRequestedAt ??= this.time()
+    if (!job.reasons.includes('USER_CANCELLED'))
+      job.reasons.push('USER_CANCELLED')
+    if (job.state === 'queued') {
+      job.state = 'cancelled'
+      job.stage = 'finished'
+      job.finishedAt = this.time()
+      job.sources.forEach((source) => {
+        source.state = 'cancelled'
+      })
+    }
+    this.save(job)
     return job
+  }
+  cancel(input: unknown): ImportJob {
+    const job = this.transaction(() =>
+      this.requestJobCancellation(this.inspect(input)),
+    )
+    if (job.state === 'running' && this.executingJobId === job.id)
+      this.controller?.abort()
+    return job
+  }
+  private cancelRequest(input: unknown): ImportRequest {
+    const request = this.transaction(() => {
+      const request = this.inspectRequest(input)
+      if (!active(request)) return request
+      request.state = 'cancelled'
+      request.pendingFollowUp = false
+      request.finishedAt = this.time()
+      request.error = null
+      this.db
+        .prepare('UPDATE import_requests_v2 SET data=? WHERE id=?')
+        .run(JSON.stringify(request), request.id)
+      const jobId = request.jobIds[request.jobIds.length - 1]
+      const owners = this.db
+        .prepare('SELECT data FROM import_requests_v2 WHERE job_id=?')
+        .all(jobId)
+        .some((row) => active(JSON.parse(String(row.data))))
+      if (!owners) this.requestJobCancellation(this.inspect(jobId))
+      return request
+    })
+    const jobId = request.jobIds[request.jobIds.length - 1]
+    if (this.executingJobId === jobId && this.inspect(jobId).cancelRequestedAt)
+      this.controller?.abort()
+    return request
   }
   results(input: unknown): AreaResults {
     if (
@@ -1037,6 +1091,7 @@ export class ImportRuntime {
       return
     }
     this.executing = true
+    this.executingJobId = job.id
     this.controller = new AbortController()
     this.heartbeat = setInterval(
       () => {
@@ -1073,11 +1128,15 @@ export class ImportRuntime {
           job.coverage = reused.coverage
           job.sources = reused.sources
           job.reasons = ['CACHE_REUSED']
-          this.save(job)
           for (const row of this.db
-            .prepare('SELECT data FROM import_requests_v2 WHERE job_id=?')
+            .prepare(
+              "SELECT data FROM import_requests_v2 WHERE job_id=? AND json_extract(data,'$.state') IN ('queued','running')",
+            )
             .all(job.id)) {
             const request: ImportRequest = JSON.parse(String(row.data))
+            request.state = 'succeeded'
+            request.finishedAt = job.finishedAt
+            request.error = null
             request.disposition = 'cached'
             request.jobIds = [reused.id]
             this.db
@@ -1086,6 +1145,7 @@ export class ImportRuntime {
               )
               .run(reused.id, JSON.stringify(request), request.id)
           }
+          this.save(job)
         })
         return
       }
@@ -1438,6 +1498,7 @@ export class ImportRuntime {
       clearInterval(this.heartbeat)
       this.db.prepare('DELETE FROM executor_v2 WHERE owner=?').run(this.owner)
       this.executing = false
+      this.executingJobId = undefined
       if (this.stopping) this.finishClose()
       else this.schedule()
     }
@@ -1467,11 +1528,8 @@ export class ImportRuntime {
         return this.inspect(input)
       case 'cancelImport':
         return this.cancel(input)
-      case 'cancelImportRequest': {
-        const request = this.inspectRequest(input)
-        this.cancel(request.jobIds[0])
-        return this.inspectRequest(request.id)
-      }
+      case 'cancelImportRequest':
+        return this.cancelRequest(input)
       case 'listImports':
         return this.list(input)
       case 'areaResults':

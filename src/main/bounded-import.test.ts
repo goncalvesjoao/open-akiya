@@ -576,7 +576,7 @@ test('request cancellation interrupts Retry-After backoff without another transp
   await expect.poll(() => waiting).toBe(true)
   expect(
     await runtime.dispatch('cancelImportRequest', request.id),
-  ).toMatchObject({ state: 'running' })
+  ).toMatchObject({ state: 'cancelled' })
   await expect
     .poll(() => runtime.inspectRequest(request.id).state)
     .toBe('cancelled')

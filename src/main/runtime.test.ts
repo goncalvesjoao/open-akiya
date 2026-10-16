@@ -113,15 +113,16 @@ test('two worker runtimes atomically reuse a request key and only one executes a
   ])
   expect(requests[0]).toEqual(requests[1])
   const other = second.createRequest({ ...input, idempotencyKey: 'other' })
-  expect(other.jobIds).not.toEqual(requests[0].jobIds)
+  expect(other.jobIds).toEqual(requests[0].jobIds)
+  expect(other.id).not.toBe(requests[0].id)
   await expect.poll(() => discoveries).toBe(1)
-  expect(second.inspect(other.jobIds[0]).state).toBe('queued')
+  expect(second.inspect(other.jobIds[0]).state).toBe('running')
   // Opening another worker while execution is live must not reset the running job.
   const third = open('workers.sqlite', 1, [adapter])
   expect(third.inspect(requests[0].jobIds[0]).state).toBe('running')
   await completed(first, requests[0].jobIds[0])
   await completed(second, other.jobIds[0])
-  expect(discoveries).toBe(2)
+  expect(discoveries).toBe(1)
   expect(maximum).toBe(1)
   expect(first.results(query).listings).toHaveLength(1)
 })
@@ -290,7 +291,11 @@ test.each([false, true])(
 test('queued and running cancellation retains saved results and never restarts cancelled jobs', async () => {
   const runtime = open('cancel.sqlite', 100)
   const request = runtime.createRequest(input)
-  const queued = runtime.createRequest({ ...input, idempotencyKey: 'queued' })
+  const queued = runtime.createRequest({
+    ...input,
+    area: { ...initialArea, center: { latitude: 36, longitude: 135 } },
+    idempotencyKey: 'queued',
+  })
   await expect
     .poll(() => runtime.inspect(request.jobIds[0]).stage)
     .toBe('fetching')
@@ -562,7 +567,7 @@ test('remote request cancellation during delayed detail preserves the previous c
   try {
     expect(
       await remote.dispatch('cancelImportRequest', request.id),
-    ).toMatchObject({ state: 'running', finishedAt: null })
+    ).toMatchObject({ state: 'cancelled', finishedAt: expect.any(String) })
     const intent = remote.inspect(request.jobIds[0])
     expect(intent).toMatchObject({
       cancelRequestedAt: expect.any(String),
@@ -585,7 +590,7 @@ test('remote request cancellation during delayed detail preserves the previous c
   })
   expect(runtime.inspectRequest(request.id)).toMatchObject({
     state: 'cancelled',
-    finishedAt: stopped.finishedAt,
+    finishedAt: expect.any(String),
   })
   expect(runtime.results(query).listings).toEqual(saved)
   await runtime.close()
