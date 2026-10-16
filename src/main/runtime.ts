@@ -900,23 +900,27 @@ export class ImportRuntime {
             status: 'partial',
             scopeKey,
             caveats: [
-              ...original.coverage.caveats,
-              ...(restarted
-                ? [
-                    'Source configuration changed; discovery restarted with current semantics',
-                  ]
-                : []),
+              ...new Set([
+                ...original.coverage.caveats,
+                ...(restarted
+                  ? [
+                      'Source configuration changed; discovery restarted with current semantics',
+                    ]
+                  : []),
+              ]),
             ],
           },
           reasons: [
-            ...original.reasons.filter((reason) =>
-              [
-                'CURSOR_EXPIRED',
-                'CURSOR_INVALID',
-                'SOURCE_CONFIGURATION_CHANGED',
-              ].includes(reason),
-            ),
-            ...(restarted ? ['SOURCE_CONFIGURATION_CHANGED'] : []),
+            ...new Set([
+              ...original.reasons.filter((reason) =>
+                [
+                  'CURSOR_EXPIRED',
+                  'CURSOR_INVALID',
+                  'SOURCE_CONFIGURATION_CHANGED',
+                ].includes(reason),
+              ),
+              ...(restarted ? ['SOURCE_CONFIGURATION_CHANGED'] : []),
+            ]),
           ],
           error: null,
           continuation: {
@@ -2220,10 +2224,13 @@ export class ImportRuntime {
                   }
                   job.continuation.restarted = true
                   job.continuation.restartReason = error.code
-                  job.reasons.push(error.code)
-                  job.coverage.caveats.push(
-                    'Saved cursor expired or invalid; discovery restarted within this job budget',
-                  )
+                  job.reasons = [...new Set([...job.reasons, error.code])]
+                  job.coverage.caveats = [
+                    ...new Set([
+                      ...job.coverage.caveats,
+                      'Saved cursor expired or invalid; discovery restarted within this job budget',
+                    ]),
+                  ]
                   this.transaction(() => {
                     this.ensure(job)
                     this.saveProgress(job, progress)
