@@ -14,6 +14,8 @@ const runtimes: ImportRuntime[] = []
 function open(name: string, delay = 1, adapters?: SourceAdapter[]) {
   const runtime = new ImportRuntime(join(directory, name), delay, {
     ...testClock(),
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...(adapters ? { adapters } : {}),
   })
   runtimes.push(runtime)
