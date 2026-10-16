@@ -510,9 +510,20 @@ export class ImportRuntime {
   }
   private pendingSources(job: ImportJob): Record<string, Progress> {
     const saved = this.savedSources(job)
+    const row = this.db
+      .prepare('SELECT progress FROM import_jobs_v2 WHERE id=?')
+      .get(job.id)!
+    const current: Progress = JSON.parse(String(row.progress))
+    const pendingRefresh = [
+      ...(current.refresh ?? []).slice(current.refreshIndex ?? 0),
+      ...(current.deferredRefresh ?? []),
+    ]
     return Object.fromEntries(
       job.sources.flatMap((source, index) => {
-        if (source.state === 'succeeded') return []
+        const refreshPending = pendingRefresh.some(
+          (task) => task.sourceIndex === index,
+        )
+        if (source.state === 'succeeded' && !refreshPending) return []
         const progress = saved[source.sourceId] ?? {
           sourceIndex: index,
           cursor: null,
@@ -527,10 +538,7 @@ export class ImportRuntime {
           progress.candidateIndex < progress.candidates.length ||
           !progress.exhausted ||
           progress.limitation !== null ||
-          [
-            ...(progress.refresh ?? []).slice(progress.refreshIndex ?? 0),
-            ...(progress.deferredRefresh ?? []),
-          ].some((task) => task.sourceIndex === index)
+          refreshPending
         return pending
           ? [
               [

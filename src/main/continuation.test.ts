@@ -922,3 +922,103 @@ test('changed adapter semantics recheck committed details without duplicating sa
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test('cancellation during tail refresh retains only unfinished tasks after discovery succeeds', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'continuation-tail-'))
+  const path = join(directory, 'db.sqlite')
+  const clock = testClock(0)
+  const offers = ['old-a', 'old-b', 'old-c'].map((externalId) => ({
+    ...fixtures[0],
+    sourceRefs: [
+      {
+        ...fixtures[0].sourceRefs[0],
+        externalId,
+        url: `https://example.invalid/${externalId}`,
+      },
+    ],
+    primarySourceUrl: `https://example.invalid/${externalId}`,
+  }))
+  const base = syntheticAdapter(0, offers)
+  const seed = new ImportRuntime(path, 0, { ...clock, adapters: [base] })
+  const seeded = seed.createRequest({
+    area: initialArea,
+    intent: 'import',
+    idempotencyKey: 'seed',
+  })
+  await expect.poll(() => seed.inspect(seeded.jobIds[0]).stage).toBe('finished')
+  await seed.close()
+  let discoveries = 0
+  let waiting = false
+  let block = true
+  const attempts: string[] = []
+  const runtime = new ImportRuntime(path, 0, {
+    ...clock,
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    detailLimit: 4,
+    adapters: [
+      {
+        ...base,
+        async discover(input, context) {
+          discoveries++
+          return { ...(await base.discover(input, context)), candidates: [] }
+        },
+      },
+    ],
+    transport: async (url, options) => {
+      if (url.includes('/old-')) attempts.push(url.split('/').at(-1)!)
+      if (block && url.endsWith('/old-c')) {
+        waiting = true
+        await new Promise<void>((resolve) =>
+          options.signal!.addEventListener('abort', () => resolve(), {
+            once: true,
+          }),
+        )
+        options.signal!.throwIfAborted()
+      }
+      return { status: 200 }
+    },
+  })
+  runtimes.push(runtime)
+  try {
+    const request = runtime.createRequest({
+      area: initialArea,
+      intent: 'import',
+      idempotencyKey: 'refresh',
+    })
+    await expect.poll(() => waiting).toBe(true)
+    expect(runtime.inspect(request.jobIds[0]).sources[0].state).toBe(
+      'succeeded',
+    )
+    runtime.cancel(request.jobIds[0])
+    await expect
+      .poll(() => runtime.inspect(request.jobIds[0]).state)
+      .toBe('cancelled')
+    const original = runtime.inspect(request.jobIds[0])
+    expect(original).toMatchObject({
+      continuation: { available: true },
+      counts: { checked: 2 },
+    })
+    block = false
+    const next = runtime.createRequest({
+      intent: 'continue',
+      fromJobId: original.id,
+      idempotencyKey: 'resume-tail',
+    })
+    await expect
+      .poll(() => runtime.inspect(next.jobIds[0]).stage)
+      .toBe('finished')
+    expect(runtime.inspect(next.jobIds[0])).toMatchObject({
+      state: 'succeeded',
+      continuation: { available: false },
+      counts: { checked: 1 },
+      budget: { discoveryUsed: 0, detailUsed: 1 },
+    })
+    expect(discoveries).toBe(1)
+    expect(attempts).toEqual(['old-a', 'old-b', 'old-c', 'old-c'])
+    expect(runtime.inspect(original.id)).toEqual(original)
+  } finally {
+    await runtime.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
