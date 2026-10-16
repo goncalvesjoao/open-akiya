@@ -9,6 +9,7 @@ import { syntheticAdapter } from './adapter'
 import { fixtures } from './fixtures'
 import { initialArea } from '../shared/geography'
 import { testClock } from './test-clock'
+// Allocation fixtures disable reuse so each ordinary import exercises stale work.
 const directory = mkdtempSync(join(tmpdir(), 'refresh-capacity-'))
 const runtimes: ImportRuntime[] = []
 afterEach(async () => {
@@ -51,6 +52,8 @@ test('reserves a detail for an older known offer omitted by abundant discovery',
   ]
   const base = syntheticAdapter(0, offers)
   const runtime = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...clock,
     detailLimit: 4,
     adapters: [
@@ -139,11 +142,18 @@ test('selects the oldest successful checks across sources before abundant new wo
       },
     }
   })
-  const seed = new ImportRuntime(path, 0, { ...clock, adapters })
+  const seed = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    ...clock,
+    adapters,
+  })
   await imported(seed)
   await seed.close()
   refresh = true
   const runtime = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...clock,
     adapters,
     detailLimit: 8,
@@ -196,11 +206,18 @@ test('a blocked refresh retains its saved result without starving another source
       },
     }),
   )
-  const seed = new ImportRuntime(path, 0, { ...clock, adapters })
+  const seed = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    ...clock,
+    adapters,
+  })
   await imported(seed)
   await seed.close()
   phase = true
   const runtime = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...clock,
     adapters,
     detailLimit: 4,
@@ -241,6 +258,8 @@ test.each([0, 0.75, 1])(
       join(directory, `release-${refreshReservation}.sqlite`),
       0,
       {
+        areaFreshnessMs: 0,
+        detailFreshnessMs: 0,
         ...clock,
         detailLimit: 4,
         refreshReservation,
@@ -274,6 +293,8 @@ test('a refresh retry chain cannot consume the new-offer reservation', async () 
   ])
   let refreshAttempts = 0
   const runtime = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...clock,
     detailLimit: 2,
     adapters: [base],
@@ -330,11 +351,18 @@ test('releases unused new-offer capacity to all remaining known refreshes', asyn
       return result
     },
   }
-  const seed = new ImportRuntime(path, 0, { ...clock, adapters: [adapter] })
+  const seed = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    ...clock,
+    adapters: [adapter],
+  })
   await imported(seed)
   await seed.close()
   changed = true
   const runtime = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...clock,
     detailLimit: 4,
     adapters: [adapter],
@@ -362,11 +390,18 @@ test('restart retains committed refreshes and accounts an interrupted refresh at
     },
   ]
   const adapter = syntheticAdapter(0, offers)
-  const seed = new ImportRuntime(path, 0, { ...clock, adapters: [adapter] })
+  const seed = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    ...clock,
+    adapters: [adapter],
+  })
   await imported(seed)
   await seed.close()
   let waiting = false
   const first = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...clock,
     adapters: [adapter],
     transport: async (url, options) => {
@@ -396,7 +431,12 @@ test('restart retains committed refreshes and accounts an interrupted refresh at
         fixtures[0].sourceRefs[0].externalId,
     )!.sourceCheckedAt
   await first.close()
-  const runtime = new ImportRuntime(path, 0, { ...clock, adapters: [adapter] })
+  const runtime = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    ...clock,
+    adapters: [adapter],
+  })
   runtimes.push(runtime)
   await expect
     .poll(() => runtime.inspect(request.jobIds[0]).state)
@@ -445,7 +485,12 @@ test('a rejected tail refresh cannot report success or advance its saved check t
         : base.normalize(evidence)
     },
   }
-  const seed = new ImportRuntime(path, 0, { ...clock, adapters: [adapter] })
+  const seed = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    ...clock,
+    adapters: [adapter],
+  })
   await imported(seed)
   const saved = seed
     .results({ area: initialArea, showUnavailable: true })
@@ -453,6 +498,8 @@ test('a rejected tail refresh cannot report success or advance its saved check t
   await seed.close()
   reject = true
   const runtime = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...clock,
     detailLimit: 2,
     adapters: [adapter],
@@ -487,7 +534,12 @@ test('a storage failure in released refresh capacity rolls back its check and ou
     },
   ]
   const adapter = syntheticAdapter(0, offers)
-  const seed = new ImportRuntime(path, 0, { ...clock, adapters: [adapter] })
+  const seed = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    ...clock,
+    adapters: [adapter],
+  })
   await imported(seed)
   const saved = seed
     .results({ area: initialArea, showUnavailable: true })
@@ -498,6 +550,8 @@ test('a storage failure in released refresh capacity rolls back its check and ou
     "CREATE TRIGGER fail_refresh BEFORE INSERT ON offer_observations WHEN NEW.external_id='second' BEGIN SELECT RAISE(ABORT,'synthetic disk failure'); END",
   )
   const runtime = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...clock,
     detailLimit: 2,
     adapters: [adapter],
@@ -547,6 +601,8 @@ test.each([1, 2])(
       },
     ])
     const runtime = new ImportRuntime(path, 0, {
+      areaFreshnessMs: 0,
+      detailFreshnessMs: 0,
       ...clock,
       detailLimit,
       adapters: [adapter],
@@ -598,6 +654,8 @@ test.each([302, 304])(
     }
     let refreshAttempts = 0
     const runtime = new ImportRuntime(path, 0, {
+      areaFreshnessMs: 0,
+      detailFreshnessMs: 0,
       ...clock,
       detailLimit: 2,
       adapters: [adapter],
@@ -634,6 +692,8 @@ test('unsupported geography cannot bypass the source gate through saved refresh 
   await seed.close()
   const base = syntheticAdapter(0)
   const runtime = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...clock,
     adapters: [
       {
@@ -698,11 +758,18 @@ test('a source that saves a new offer stays partial when its released refresh is
       },
     }
   })
-  const seed = new ImportRuntime(path, 0, { ...clock, adapters: sources })
+  const seed = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    ...clock,
+    adapters: sources,
+  })
   await imported(seed)
   await seed.close()
   refreshing = true
   const runtime = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...clock,
     detailLimit: 4,
     adapters: sources,
@@ -762,11 +829,18 @@ test('oldest successful refresh compares timestamp instants across UTC offsets',
       return result
     },
   }
-  const seed = new ImportRuntime(path, 0, { ...clock, adapters: [adapter] })
+  const seed = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
+    ...clock,
+    adapters: [adapter],
+  })
   await imported(seed)
   await seed.close()
   refreshing = true
   const runtime = new ImportRuntime(path, 0, {
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     ...clock,
     detailLimit: 1,
     adapters: [adapter],

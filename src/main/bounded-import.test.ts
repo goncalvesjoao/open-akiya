@@ -223,7 +223,7 @@ test('detail attempts stop at 100 and known-outside candidates consume no detail
     idempotencyKey: 'details',
   })
   await expect
-    .poll(() => runtime.inspect(request.jobIds[0]).stage)
+    .poll(() => runtime.inspect(request.jobIds[0]).stage, { timeout: 5000 })
     .toBe('finished')
   expect(runtime.inspect(request.jobIds[0])).toMatchObject({
     state: 'partial',
@@ -331,6 +331,8 @@ test('failed refresh preserves the previous listing and successful-check timesta
   let blocked = false
   const runtime = new ImportRuntime(':memory:', 0, {
     ...clock,
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     transport: async () => ({ status: blocked ? 403 : 200 }),
   })
   runtimes.push(runtime)
@@ -574,7 +576,7 @@ test('request cancellation interrupts Retry-After backoff without another transp
   await expect.poll(() => waiting).toBe(true)
   expect(
     await runtime.dispatch('cancelImportRequest', request.id),
-  ).toMatchObject({ state: 'running' })
+  ).toMatchObject({ state: 'cancelled' })
   await expect
     .poll(() => runtime.inspectRequest(request.id).state)
     .toBe('cancelled')

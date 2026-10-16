@@ -32,6 +32,8 @@ async function imported(runtime: ImportRuntime) {
 function open(name: string, adapters: SourceAdapter[]) {
   const runtime = new ImportRuntime(join(directory, name), 1, {
     ...testClock(),
+    areaFreshnessMs: 0,
+    detailFreshnessMs: 0,
     adapters,
   })
   runtimes.push(runtime)
