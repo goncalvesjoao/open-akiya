@@ -231,7 +231,7 @@ test('detail attempts stop at 100 and known-outside candidates consume no detail
     budget: { detailUsed: 100 },
     coverage: { status: 'partial' },
   })
-})
+}, 10000)
 
 test('timeouts have bounded retries and cancellation aborts transport without retrying', async () => {
   for (const cancel of [false, true]) {

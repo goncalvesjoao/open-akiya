@@ -509,7 +509,11 @@ test('a rejected tail refresh cannot report success or advance its saved check t
     state: 'partial',
     counts: { checked: 2, rejected: 1, unchanged: 1 },
     sources: [
-      { state: 'partial', coverage: 'partial', error: { code: 'PARSE_ERROR' } },
+      {
+        state: 'partial',
+        coverage: 'complete',
+        error: { code: 'PARSE_ERROR' },
+      },
     ],
   })
   expect(
@@ -565,7 +569,7 @@ test('a storage failure in released refresh capacity rolls back its check and ou
       sources: [
         {
           state: 'partial',
-          coverage: 'partial',
+          coverage: 'complete',
           error: { code: 'INTERNAL_ERROR' },
         },
       ],
@@ -784,7 +788,7 @@ test('a source that saves a new offer stays partial when its released refresh is
       {
         sourceId: 'second',
         state: 'partial',
-        coverage: 'partial',
+        coverage: 'complete',
         error: { code: 'PARSE_ERROR' },
       },
     ],

@@ -47,8 +47,16 @@ const coverage = (scopeKey: string | null): Coverage => ({
   lastSuccessfulCheckAt: null,
   freshUntil: null,
   scopeKey,
-  caveats: ['Synthetic fixtures only; no real inventory or source coverage.'],
+  caveats: [
+    'Synthetic fixtures only; discovery coverage is not real-world inventory completeness.',
+  ],
 })
+type DiscoveryDates = {
+  reliable: boolean
+  newestAt: number | null
+  lastAt: number | null
+  stopBefore: number | null
+}
 type Progress = {
   sourceIndex: number
   resumeSources?: Record<string, Progress>
@@ -59,6 +67,8 @@ type Progress = {
   limitation: string | null
   discovered: string[]
   completed: string[]
+  discoveryComplete?: boolean
+  dates?: DiscoveryDates
   sourceSaved?: number
   refresh?: {
     sourceIndex: number
@@ -167,6 +177,7 @@ export class ImportRuntime {
       CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, external_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(source_id,external_id));
       CREATE TABLE IF NOT EXISTS listing_discovery_areas (listing_id TEXT NOT NULL REFERENCES listings(id), area TEXT NOT NULL, PRIMARY KEY(listing_id,area));
       CREATE TABLE IF NOT EXISTS source_host_limits (host TEXT PRIMARY KEY, next_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS discovery_checkpoints (source_id TEXT NOT NULL, query_key TEXT NOT NULL, adapter_version TEXT NOT NULL, date_field TEXT NOT NULL, boundary_at TEXT NOT NULL, overlap_seconds INTEGER NOT NULL, completed_at TEXT NOT NULL, PRIMARY KEY(source_id,query_key,adapter_version,date_field));
       CREATE TABLE IF NOT EXISTS source_traversals (job_id TEXT NOT NULL, source_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(job_id,source_id));
       CREATE TABLE IF NOT EXISTS source_task_state (job_id TEXT NOT NULL, source_id TEXT NOT NULL, retry_at INTEGER, PRIMARY KEY(job_id,source_id));
       CREATE TABLE IF NOT EXISTS offer_keys (source_id TEXT NOT NULL, external_id TEXT NOT NULL, transaction_type TEXT NOT NULL, listing_id TEXT NOT NULL REFERENCES listings(id), PRIMARY KEY(source_id,external_id,transaction_type));
@@ -739,6 +750,14 @@ export class ImportRuntime {
             continuedScope,
             JSON.stringify(progress),
           )
+        for (const [sourceId, saved] of Object.entries(
+          this.savedSources(original),
+        )) {
+          if (changedSources.has(sourceId)) continue
+          this.db
+            .prepare('INSERT INTO source_traversals VALUES (?,?,?)')
+            .run(job.id, sourceId, JSON.stringify(saved))
+        }
         this.db
           .prepare('INSERT INTO import_continuations VALUES (?,?)')
           .run(fromJobId, job.id)
@@ -1509,6 +1528,7 @@ export class ImportRuntime {
           job.counts.rejected++
           source.error = safeError(error)
           ;(progress.rejectionErrors ??= {})[source.sourceId] = source.error
+          if (detailClass === 'new') progress.rejectionError = source.error
         }
       } else {
         job.counts.rejected++
@@ -1518,6 +1538,7 @@ export class ImportRuntime {
           retryable: false,
         }
         ;(progress.rejectionErrors ??= {})[source.sourceId] = source.error
+        if (detailClass === 'new') progress.rejectionError = source.error
       }
       progress.completed.push(identity)
       advance()
@@ -1800,6 +1821,8 @@ export class ImportRuntime {
             resume.exhausted = false
             resume.limitation = null
             resume.visitedCursors = []
+            resume.dates = undefined
+            resume.discoveryComplete = false
             job.continuation.restarted = true
             job.continuation.restartReason = 'SOURCE_LIMITATION'
           }
@@ -1813,6 +1836,8 @@ export class ImportRuntime {
             'sourceSaved',
             'rejectionError',
             'visitedCursors',
+            'dates',
+            'discoveryComplete',
           ] as const) {
             Object.assign(progress, { [key]: resume[key] })
           }
@@ -1838,6 +1863,36 @@ export class ImportRuntime {
           progress.rejectionError ??
           source.error
         const context = this.context(job, adapter, progress)
+        const ordering = adapter.capabilities.dateOrdering
+        if (!progress.dates) {
+          const reliable =
+            !!ordering &&
+            ordering.descendingVerified === true &&
+            !!ordering.evidence.trim() &&
+            Number.isSafeInteger(ordering.overlapSeconds) &&
+            ordering.overlapSeconds >= 0
+          const checkpoint = reliable
+            ? this.db
+                .prepare(
+                  'SELECT boundary_at FROM discovery_checkpoints WHERE source_id=? AND query_key=? AND adapter_version=? AND date_field=?',
+                )
+                .get(
+                  adapter.capabilities.sourceId,
+                  job.scopeKey,
+                  adapter.capabilities.adapterVersion,
+                  ordering!.field,
+                )
+            : undefined
+          progress.dates = {
+            reliable,
+            newestAt: null,
+            lastAt: null,
+            stopBefore: checkpoint
+              ? Date.parse(String(checkpoint.boundary_at)) -
+                ordering!.overlapSeconds * 1000
+              : null,
+          }
+        }
         try {
           if (adapter.capabilities.geography === 'unsupported')
             throw new LocalApiError(
@@ -1877,6 +1932,13 @@ export class ImportRuntime {
                   progress.visitedCursors = []
                   progress.exhausted = false
                   progress.limitation = null
+                  progress.discoveryComplete = false
+                  progress.dates = {
+                    reliable: progress.dates!.reliable,
+                    newestAt: null,
+                    lastAt: null,
+                    stopBefore: progress.dates!.stopBefore,
+                  }
                   job.continuation.restarted = true
                   job.continuation.restartReason = error.code
                   job.reasons.push(error.code)
@@ -1916,6 +1978,35 @@ export class ImportRuntime {
                   'PARSE_ERROR',
                   'Source discovery could not be parsed',
                 )
+              // Verify every date on the received page before using its boundary.
+              const dates = progress.dates!
+              for (const candidate of page.candidates) {
+                const value = ordering ? candidate[ordering.field] : null
+                const time =
+                  typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)
+                    ? Date.parse(value)
+                    : NaN
+                if (
+                  !Number.isFinite(time) ||
+                  (dates.lastAt !== null && time > dates.lastAt)
+                )
+                  dates.reliable = false
+                if (Number.isFinite(time)) {
+                  dates.newestAt ??= time
+                  dates.lastAt = time
+                }
+              }
+              if (dates.reliable && dates.stopBefore !== null) {
+                const boundary = page.candidates.findIndex(
+                  (candidate) =>
+                    Date.parse(candidate[ordering!.field]!) < dates.stopBefore!,
+                )
+                if (boundary >= 0) {
+                  page.candidates = page.candidates.slice(0, boundary)
+                  page.nextCursor = null
+                  page.exhausted = true
+                }
+              }
               progress.visitedCursors.push(cursorKey)
               progress.candidates = page.candidates
               progress.candidateIndex = 0
@@ -2003,6 +2094,8 @@ export class ImportRuntime {
             progress.candidates = []
             progress.candidateIndex = 0
             this.saveProgress(job, progress)
+            if (progress.exhausted && !progress.limitation)
+              progress.discoveryComplete = !progress.rejectionError
             if (progress.exhausted || progress.limitation) break
             if (!progress.cursor)
               throw new LocalApiError(
@@ -2017,10 +2110,7 @@ export class ImportRuntime {
                 ? 'partial'
                 : 'failed'
               : 'succeeded'
-          source.coverage =
-            progress.exhausted && !progress.limitation && !source.error
-              ? 'complete'
-              : 'partial'
+          source.coverage = progress.discoveryComplete ? 'complete' : 'partial'
           if (progress.limitation) {
             job.reasons.push('SOURCE_LIMITATION')
             job.coverage.caveats.push(progress.limitation)
@@ -2050,7 +2140,9 @@ export class ImportRuntime {
           failedSource.state = usefulProgress(progress, failedSource.error.code)
             ? 'partial'
             : 'failed'
-          failedSource.coverage = 'partial'
+          failedSource.coverage = progress.discoveryComplete
+            ? 'complete'
+            : 'partial'
           job.reasons.push(failedSource.error.code)
         }
         // Retain the interrupted task privately; #6 can consume it without
@@ -2068,6 +2160,8 @@ export class ImportRuntime {
               outcome: job.sources[progress.sourceIndex],
             }),
           )
+        progress.discoveryComplete = false
+        progress.dates = undefined
         progress.sourceSaved = 0
         progress.rejectionError = undefined
         progress.sourceIndex++
@@ -2146,6 +2240,10 @@ export class ImportRuntime {
           'refreshReservation',
         ] as const)
           saved[key] = progress[key]
+        const source = job.sources.find(
+          (source) => source.sourceId === row.source_id,
+        )!
+        if (saved.discoveryComplete) source.coverage = 'complete'
         saved.outcome = job.sources.find(
           (source) => source.sourceId === row.source_id,
         )
@@ -2191,6 +2289,35 @@ export class ImportRuntime {
       this.transaction(() => {
         this.ensure(job)
         this.save(job)
+        if (job.state === 'succeeded') {
+          for (const adapter of this.adapters) {
+            const ordering = adapter.capabilities.dateOrdering
+            if (!ordering) continue
+            const traversal = this.db
+              .prepare(
+                'SELECT data FROM source_traversals WHERE job_id=? AND source_id=?',
+              )
+              .get(job.id, adapter.capabilities.sourceId)
+            const dates: DiscoveryDates | undefined =
+              traversal && JSON.parse(String(traversal.data)).dates
+            if (!dates?.reliable || dates.newestAt === null) continue
+            this.db
+              .prepare(
+                `INSERT INTO discovery_checkpoints VALUES (?,?,?,?,?,?,?)
+              ON CONFLICT(source_id,query_key,adapter_version,date_field) DO UPDATE SET
+              boundary_at=max(boundary_at,excluded.boundary_at), overlap_seconds=excluded.overlap_seconds, completed_at=excluded.completed_at`,
+              )
+              .run(
+                adapter.capabilities.sourceId,
+                job.scopeKey,
+                adapter.capabilities.adapterVersion,
+                ordering.field,
+                new Date(dates.newestAt).toISOString(),
+                ordering.overlapSeconds,
+                job.finishedAt!,
+              )
+          }
+        }
       })
     } catch (error) {
       if (this.owned()) {
