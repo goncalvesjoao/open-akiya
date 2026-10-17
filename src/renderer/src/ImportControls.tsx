@@ -26,6 +26,19 @@ function retainRequestId(id: string) {
   }
 }
 
+function forgetRequestId(id: string) {
+  try {
+    localStorage.setItem(
+      requestStorageKey,
+      JSON.stringify(
+        retainedRequestIds().filter((retained) => retained !== id),
+      ),
+    )
+  } catch {
+    /* Queue remains available when browser storage is unavailable. */
+  }
+}
+
 function isTerminal(state: Job['state']) {
   return state !== 'queued' && state !== 'running'
 }
@@ -70,7 +83,23 @@ export default function ImportControls({
         ensureCurrent()
         for (const job of activeJobs) observedJobs.current.set(job.id, job)
         for (const id of reconnect) {
-          const restored = await window.openAkiya.inspectImportRequest(id)
+          let restored: ImportRequest
+          try {
+            restored = await window.openAkiya.inspectImportRequest(id)
+          } catch (failure) {
+            ensureCurrent()
+            if (
+              failure &&
+              typeof failure === 'object' &&
+              'code' in failure &&
+              failure.code === 'NOT_FOUND'
+            ) {
+              reconnect.delete(id)
+              forgetRequestId(id)
+              continue
+            }
+            throw failure
+          }
           ensureCurrent()
           requests.current.set(id, restored)
           setRequestHistory((history) => [
@@ -99,8 +128,10 @@ export default function ImportControls({
               const job = observedJobs.current.get(jobId)
               return job !== undefined && isTerminal(job.state)
             })
-          )
+          ) {
             requests.current.delete(id)
+            forgetRequestId(id)
+          }
           if (
             snapshot.state !== nextRequest.state &&
             isTerminal(nextRequest.state)

@@ -18,6 +18,7 @@ import {
 } from '../../shared/import-fixtures'
 import {
   cancellationRequestedJob,
+  cancelledImportJob,
   cancelledAttachedRequest,
 } from '../../shared/cancellation-fixtures'
 import type { DesktopAPI, Job, ImportRequest } from '../../shared/desktop'
@@ -250,12 +251,18 @@ test.each(['pending follow-up', 'running shared job'])(
         await vi.advanceTimersByTimeAsync(1000)
       })
       expect(api.inspectImportRequest).toHaveBeenCalledTimes(2)
+      expect(
+        JSON.parse(localStorage.getItem('open-akiya.import-request-ids')!),
+      ).toEqual([cachedImportRequest.id])
       finished = true
       settled.mockClear()
       await act(async () => {
         await vi.advanceTimersByTimeAsync(500)
       })
       expect(api.inspectImportRequest).toHaveBeenCalledTimes(3)
+      expect(
+        JSON.parse(localStorage.getItem('open-akiya.import-request-ids')!),
+      ).toEqual([])
       expect(screen.getByText(/Request accepted.*cached/)).toBeVisible()
       expect(
         screen.getByRole('list', { name: 'Import queue' }),
@@ -372,8 +379,10 @@ test('distinguishes request intent from shared execution and retains every accep
 
 test('shows cancellation requested until returned execution settles and preserves committed counts', async () => {
   const pending = cancellationRequestedJob
+  let finished = false
   const api = setup({
-    listImports: vi.fn(async () => ({ jobs: [job] })),
+    listImports: vi.fn(async () => ({ jobs: finished ? [] : [job] })),
+    inspectImport: vi.fn(async () => cancelledImportJob),
     cancelImport: vi.fn(async () => pending),
   })
   render(<ImportControls area={initialArea} onSettled={() => {}} />)
@@ -388,6 +397,12 @@ test('shows cancellation requested until returned execution settles and preserve
     screen.getByRole('list', { name: 'Import queue' }),
   ).not.toHaveTextContent('Cancelled')
   expect(api.cancelImportRequest).not.toHaveBeenCalled()
+  finished = true
+  expect(await screen.findByText('Cancelled')).toBeVisible()
+  expect(screen.queryByText(/Cancellation requested/)).toBeNull()
+  expect(screen.getByRole('list', { name: 'Import queue' })).toHaveTextContent(
+    '1 saved',
+  )
 })
 
 test('retains the server terminal outcome when cancellation races with completion', async () => {
@@ -542,3 +557,67 @@ test.each(['job', 'request'])(
     expect(screen.queryByText('private')).toBeNull()
   },
 )
+
+test('drops missing reconnect IDs without hiding healthy requests and queue work', async () => {
+  localStorage.setItem(
+    'open-akiya.import-request-ids',
+    JSON.stringify(['missing', queuedImportRequest.id]),
+  )
+  const api = setup({
+    listImports: vi.fn(async () => ({ jobs: [job] })),
+    inspectImportRequest: vi.fn(async (id) => {
+      if (id === 'missing')
+        throw Object.assign(new Error('missing'), { code: 'NOT_FOUND' })
+      return queuedImportRequest
+    }),
+  })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  expect(
+    await screen.findByRole('button', { name: 'Cancel request intent' }),
+  ).toBeVisible()
+  expect(
+    screen.getByRole('button', { name: 'Cancel running job' }),
+  ).toBeVisible()
+  expect(screen.queryByRole('alert')).toBeNull()
+  expect(
+    JSON.parse(localStorage.getItem('open-akiya.import-request-ids')!),
+  ).toEqual([queuedImportRequest.id])
+  expect(api.createImportRequest).not.toHaveBeenCalled()
+})
+
+test('retains reconnect IDs on transient inspection failure and retries them', async () => {
+  vi.useFakeTimers()
+  try {
+    localStorage.setItem(
+      'open-akiya.import-request-ids',
+      JSON.stringify([queuedImportRequest.id]),
+    )
+    const inspect = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error('unavailable'), { code: 'TRANSPORT_ERROR' }),
+      )
+      .mockResolvedValue(queuedImportRequest)
+    setup({ inspectImportRequest: inspect })
+    await act(async () => {
+      render(<ImportControls area={initialArea} onSettled={() => {}} />)
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Import worker unavailable',
+    )
+    expect(
+      JSON.parse(localStorage.getItem('open-akiya.import-request-ids')!),
+    ).toEqual([queuedImportRequest.id])
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(
+      screen.getByRole('button', { name: 'Cancel request intent' }),
+    ).toBeVisible()
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(inspect).toHaveBeenCalledWith(queuedImportRequest.id)
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
+})
