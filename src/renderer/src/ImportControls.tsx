@@ -22,6 +22,26 @@ function isTerminal(state: Job['state']) {
   return state !== 'queued' && state !== 'running'
 }
 
+function restartExplanation(job: Job) {
+  const reason =
+    job.continuation.restartReason ??
+    job.reasons.find((value) =>
+      [
+        'CURSOR_EXPIRED',
+        'CURSOR_INVALID',
+        'SOURCE_CONFIGURATION_CHANGED',
+        'SOURCE_LIMITATION',
+      ].includes(value),
+    )
+  if (reason === 'CURSOR_EXPIRED' || reason === 'CURSOR_INVALID')
+    return 'Saved discovery progress expired or was invalid'
+  if (reason === 'SOURCE_CONFIGURATION_CHANGED')
+    return 'Saved progress could not be reused because source configuration changed'
+  if (reason === 'SOURCE_LIMITATION')
+    return 'Saved progress could not be reused because of a source limitation'
+  return 'Saved discovery progress could not be reused'
+}
+
 export default function ImportControls({
   area,
   onSettled,
@@ -201,6 +221,25 @@ export default function ImportControls({
       clearTimeout(timer)
     }
   }, [])
+  function acceptRequest(accepted: ImportRequest) {
+    revision.current++
+    saveRecovery('import-last-request-id', accepted.id)
+    retainedRequests.current.add(accepted.id)
+    saveRecovery('import-request-ids', [...retainedRequests.current])
+    for (const id of accepted.jobIds) retainedJobs.current.add(id)
+    saveRecovery('import-job-ids', [...retainedJobs.current])
+    requests.current.set(accepted.id, accepted)
+    setRequestHistory((history) => [
+      ...history.filter((item) => item.id !== accepted.id),
+      accepted,
+    ])
+    requestRef.current = accepted.id
+    setRequest(accepted)
+    if (isTerminal(accepted.state)) settled.current()
+    // Fast work can finish between active-queue reads for any intent.
+    previous.current = ''
+    pendingAction.current = null
+  }
   async function continueSearch(job: Job) {
     setCreating(true)
     setError('')
@@ -213,21 +252,7 @@ export default function ImportControls({
         fromJobId: job.id,
         idempotencyKey: pendingAction.current.key,
       })
-      revision.current++
-      retainedRequests.current.add(accepted.id)
-      saveRecovery('import-last-request-id', accepted.id)
-      saveRecovery('import-request-ids', [...retainedRequests.current])
-      for (const id of accepted.jobIds) retainedJobs.current.add(id)
-      saveRecovery('import-job-ids', [...retainedJobs.current])
-      requests.current.set(accepted.id, accepted)
-      setRequestHistory((history) => [
-        ...history.filter((item) => item.id !== accepted.id),
-        accepted,
-      ])
-      requestRef.current = accepted.id
-      setRequest(accepted)
-      pendingAction.current = null
-      if (isTerminal(accepted.state)) settled.current()
+      acceptRequest(accepted)
     } catch (failure) {
       const code =
         failure && typeof failure === 'object' && 'code' in failure
@@ -263,23 +288,7 @@ export default function ImportControls({
                 area,
                 idempotencyKey,
               })
-              revision.current++
-              saveRecovery('import-last-request-id', accepted.id)
-              retainedRequests.current.add(accepted.id)
-              saveRecovery('import-request-ids', [...retainedRequests.current])
-              for (const id of accepted.jobIds) retainedJobs.current.add(id)
-              saveRecovery('import-job-ids', [...retainedJobs.current])
-              requests.current.set(accepted.id, accepted)
-              setRequestHistory((history) => [
-                ...history.filter((item) => item.id !== accepted.id),
-                accepted,
-              ])
-              requestRef.current = accepted.id
-              setRequest(accepted)
-              if (isTerminal(accepted.state)) settled.current()
-              // A fast import can finish between active-queue reads.
-              previous.current = ''
-              pendingAction.current = null
+              acceptRequest(accepted)
             } catch (failure) {
               const code =
                 failure && typeof failure === 'object' && 'code' in failure
@@ -423,8 +432,8 @@ export default function ImportControls({
                   reason === 'CURSOR_EXPIRED' || reason === 'CURSOR_INVALID',
               )) && (
               <p>
-                Saved discovery progress expired or was invalid; discovery
-                restarted within the job budget (
+                {restartExplanation(job)}; discovery restarted within the job
+                budget (
                 {job.continuation.restartReason ??
                   job.reasons
                     .filter((reason) => reason.startsWith('CURSOR_'))

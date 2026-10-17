@@ -1051,3 +1051,37 @@ test('explains bounded truncation and configured discovery coverage limits', asy
     'not exhaustive',
   )
 })
+
+test.each([
+  ['SOURCE_CONFIGURATION_CHANGED', 'source configuration changed'],
+  ['SOURCE_LIMITATION', 'source limitation'],
+])(
+  'explains %s restarts without claiming a cursor expired',
+  async (reason, explanation) => {
+    const { continuationFixtures: f } =
+      await import('../../shared/continuation-fixtures')
+    localStorage.setItem(
+      'import-job-ids',
+      JSON.stringify([f.restartedSucceeded.id]),
+    )
+    setup({
+      inspectImport: vi.fn(async () => ({
+        ...f.restartedSucceeded,
+        reasons: [reason],
+        continuation: {
+          ...f.restartedSucceeded.continuation,
+          restartReason: reason,
+        },
+        coverage: { ...f.restartedSucceeded.coverage, caveats: [] },
+      })),
+    })
+    render(<ImportControls area={initialArea} onSettled={() => {}} />)
+    expect(
+      await screen.findByText(/discovery restarted within/),
+    ).toHaveTextContent(explanation)
+    expect(
+      screen.queryByText(/progress expired or was invalid/),
+    ).not.toBeInTheDocument()
+    expect(screen.getByText('Search finished')).toBeVisible()
+  },
+)
