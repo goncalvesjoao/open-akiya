@@ -12,6 +12,9 @@ import { initialArea } from './listings/query'
 import {
   runningImportJob as job,
   queuedImportRequest,
+  succeededImportJob,
+  cachedImportRequest,
+  attachedImportRequest,
 } from '../../shared/import-fixtures'
 import type { DesktopAPI, Job, ImportRequest } from '../../shared/desktop'
 
@@ -21,7 +24,7 @@ function setup(overrides: Partial<DesktopAPI> = {}) {
     createImportRequest: vi.fn(async (): Promise<ImportRequest> =>
       structuredClone(queuedImportRequest),
     ),
-    inspectImportRequest: vi.fn(),
+    inspectImportRequest: vi.fn(async () => queuedImportRequest),
     inspectImport: vi.fn(async () => job),
     cancelImportRequest: vi.fn(),
     cancelImport: vi.fn(async (): Promise<Job> => ({
@@ -58,7 +61,11 @@ test('starts only on explicit action and retains immutable job area when selecti
       idempotencyKey: expect.any(String),
     }),
   )
-  await screen.findByText(/35, 135/)
+  await waitFor(() =>
+    expect(
+      screen.getByRole('list', { name: 'Import queue' }),
+    ).toHaveTextContent('5 km'),
+  )
   rerender(
     <ImportControls
       area={{ ...initialArea, radiusKm: 1 }}
@@ -96,7 +103,11 @@ test('announces worker failure with a recovery action', async () => {
 test('refreshes saved results when an import finishes before the active queue is read', async () => {
   vi.useFakeTimers()
   try {
-    setup()
+    setup({
+      createImportRequest: vi.fn(async () => cachedImportRequest),
+      inspectImportRequest: vi.fn(async () => cachedImportRequest),
+      inspectImport: vi.fn(async () => succeededImportJob),
+    })
     const settled = vi.fn()
     await act(async () => {
       render(<ImportControls area={initialArea} onSettled={settled} />)
@@ -110,6 +121,119 @@ test('refreshes saved results when an import finishes before the active queue is
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500)
     })
+    expect(settled).toHaveBeenCalled()
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
+})
+
+test('acknowledges a persisted attached request before queue polling completes', async () => {
+  setup({
+    createImportRequest: vi.fn(async () => attachedImportRequest),
+    listImports: vi.fn(() => new Promise<{ jobs: Job[] }>(() => {})),
+  })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Import sample listings' }),
+  )
+  expect(await screen.findByText(/Request accepted.*attached/)).toBeVisible()
+})
+
+test('keeps the acknowledged request and discovers terminal jobs absent from the active queue', async () => {
+  vi.useFakeTimers()
+  try {
+    const { succeededImportJob, cachedImportRequest } =
+      await import('../../shared/import-fixtures')
+    setup({
+      createImportRequest: vi.fn(async () => cachedImportRequest),
+      inspectImportRequest: vi.fn(async () => cachedImportRequest),
+      inspectImport: vi.fn(async () => succeededImportJob),
+    })
+    const settled = vi.fn()
+    await act(async () => {
+      render(<ImportControls area={initialArea} onSettled={settled} />)
+    })
+    settled.mockClear()
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Import sample listings' }),
+      )
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(
+      screen.getByRole('list', { name: 'Import queue' }),
+    ).toHaveTextContent('Search finished')
+    expect(settled).toHaveBeenCalled()
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
+})
+
+test.each([
+  'INVALID_INPUT',
+  'NO_ENABLED_SOURCES',
+  'UNAUTHORIZED',
+  'IDEMPOTENCY_CONFLICT',
+])('explains %s rejection without acknowledging success', async (code) => {
+  setup({
+    createImportRequest: vi.fn(async () => {
+      throw Object.assign(new Error('private'), { code })
+    }),
+  })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Import sample listings' }),
+  )
+  expect(await screen.findByRole('alert')).toHaveTextContent(code)
+  expect(screen.queryByText(/Request accepted/)).toBeNull()
+})
+
+test('retries a lost acknowledgement with the same action key and suppresses double clicks', async () => {
+  const keys: string[] = []
+  const api = setup({
+    createImportRequest: vi.fn(async (input) => {
+      keys.push(input.idempotencyKey)
+      if (keys.length === 1) throw new Error('connection lost')
+      return queuedImportRequest
+    }),
+  })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  const button = screen.getByRole('button', { name: 'Import sample listings' })
+  fireEvent.click(button)
+  fireEvent.click(button)
+  await screen.findByRole('alert')
+  expect(api.createImportRequest).toHaveBeenCalledTimes(1)
+  fireEvent.click(button)
+  await screen.findByText(/Request accepted/)
+  expect(keys).toHaveLength(2)
+  expect(keys[1]).toBe(keys[0])
+})
+
+test('refreshes saved results for a failed tracked job after it leaves the queue', async () => {
+  vi.useFakeTimers()
+  try {
+    const { failedImportJob } = await import('../../shared/import-fixtures')
+    let finished = false
+    setup({
+      listImports: vi.fn(async () => ({ jobs: finished ? [] : [job] })),
+      inspectImport: vi.fn(async () => failedImportJob),
+    })
+    const settled = vi.fn()
+    await act(async () => {
+      render(<ImportControls area={initialArea} onSettled={settled} />)
+    })
+    settled.mockClear()
+    finished = true
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(
+      screen.getByRole('list', { name: 'Import queue' }),
+    ).toHaveTextContent('Failed')
     expect(settled).toHaveBeenCalledTimes(1)
   } finally {
     cleanup()

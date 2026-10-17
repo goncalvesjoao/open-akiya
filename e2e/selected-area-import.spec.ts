@@ -35,6 +35,7 @@ test('imports the explicitly selected synthetic area and retains saved results a
       env: {
         ...process.env,
         OPEN_AKIYA_TEST_HIDDEN: '1',
+        OPEN_AKIYA_TEST_IMPORT_PROGRESS: '1',
         OPEN_AKIYA_TEST_DATA: directory,
         OPEN_AKIYA_LOCATION_SEARCH_URL: endpoint,
       },
@@ -122,11 +123,30 @@ test('imports the explicitly selected synthetic area and retains saved results a
     await session.page
       .getByRole('button', { name: 'Import sample listings' })
       .click()
+    await expect(
+      session.page.getByText(/Request accepted · created/),
+    ).toBeVisible()
+    const queue = session.page.getByRole('list', { name: 'Import queue' })
+    await expect(queue).toContainText(/Stage: (discovering|fetching|saving)/)
+    await expect(queue).toContainText('discovered')
+    await session.page.reload()
+    await expect(
+      session.page.getByRole('list', { name: 'Import queue' }),
+    ).toContainText('Job area: 35, 135')
     const listing = session.page.getByRole('button', {
       name: 'Sample sale listing',
       exact: true,
     })
     await expect(listing).toBeVisible()
+    await expect(
+      session.page.getByRole('button', {
+        name: 'Pin: Sample sale listing',
+        exact: true,
+      }),
+    ).toBeVisible()
+    await expect(
+      session.page.getByRole('list', { name: 'Import queue' }),
+    ).toContainText('Search finished')
     await listing.click()
     await expect(
       session.page.getByRole('region', { name: 'Listing details' }),

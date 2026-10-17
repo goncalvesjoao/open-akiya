@@ -362,3 +362,39 @@ test.each([
     expect(screen.queryByRole('region', { name: 'Listing details' })).toBeNull()
   },
 )
+
+test('shows worker-provided freshness before collection without inventing a successful check', async () => {
+  Object.defineProperty(window, 'openAkiya', {
+    configurable: true,
+    value: {
+      areaResults: vi.fn(async () =>
+        savedResults({ freshUntil: '2026-10-16T00:00:00Z' }),
+      ),
+      listImports: () => new Promise(() => {}),
+    },
+  })
+  render(<AreaMap />)
+  expect(
+    await screen.findByText(/Fresh until: 2026-10-16T00:00:00Z/),
+  ).toBeVisible()
+  expect(screen.getByText(/Last successful covering check:/)).toHaveTextContent(
+    'Unknown',
+  )
+})
+
+test('shows unknown successful-check times directly beside saved listings before importing', async () => {
+  const result = savedResults()
+  result.listings = [{ ...result.listings[0], sourceCheckedAt: null }]
+  Object.defineProperty(window, 'openAkiya', {
+    configurable: true,
+    value: {
+      areaResults: vi.fn(async () => result),
+      listImports: () => new Promise(() => {}),
+    },
+  })
+  render(<AreaMap />)
+  await screen.findByText(/1 synthetic listings/)
+  expect(
+    screen.getByRole('list', { name: 'Listing results' }),
+  ).toHaveTextContent('Last successful check: Unknown')
+})

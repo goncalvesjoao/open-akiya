@@ -489,3 +489,65 @@ test('a queued overlap rechecks detail exactly at its expiry', async () => {
     await runtime.close()
   }
 })
+
+test('shared empty-success and cache response recipes agree with the real worker API', async () => {
+  const { syntheticAdapter } = await import('./adapter')
+  const { succeededImportJob, cachedImportRequest } =
+    await import('../shared/import-fixtures')
+  const runtime = new ImportRuntime(':memory:', 0, {
+    ...testClock(Date.parse('2026-10-15T00:00:00Z')),
+    adapters: [
+      {
+        ...syntheticAdapter(0),
+        async discover() {
+          return {
+            candidates: [],
+            nextCursor: null,
+            exhausted: true,
+            limitation: null,
+          }
+        },
+      },
+    ],
+  })
+  try {
+    const request = runtime.createRequest({
+      area: initialArea,
+      intent: 'import',
+      idempotencyKey: 'empty-contract',
+    })
+    await expect
+      .poll(() => runtime.inspectRequest(request.id).state)
+      .toBe('succeeded')
+    const job = runtime.inspect(request.jobIds[0])
+    // Compare shared semantic expectations; IDs, clock times and scope keys are
+    // runtime-owned, not fixture constants or browser-created DTOs.
+    expect(job).toMatchObject({
+      area: succeededImportJob.area,
+      state: succeededImportJob.state,
+      stage: succeededImportJob.stage,
+      counts: succeededImportJob.counts,
+      error: succeededImportJob.error,
+      coverage: { status: succeededImportJob.coverage.status },
+    })
+    const cached = runtime.createRequest({
+      area: initialArea,
+      intent: 'import',
+      idempotencyKey: 'empty-cached-contract',
+    })
+    expect(cached).toMatchObject({
+      area: cachedImportRequest.area,
+      intent: cachedImportRequest.intent,
+      disposition: cachedImportRequest.disposition,
+      state: cachedImportRequest.state,
+      pendingFollowUp: cachedImportRequest.pendingFollowUp,
+      error: cachedImportRequest.error,
+      jobIds: request.jobIds,
+    })
+    expect(
+      runtime.results({ area: initialArea, showUnavailable: false }).listings,
+    ).toEqual([])
+  } finally {
+    await runtime.close()
+  }
+})

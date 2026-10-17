@@ -69,6 +69,11 @@ function ListingRow({
       <button aria-pressed={selected} onClick={() => onSelect(listing.id)}>
         {listingTitle(listing)}
       </button>
+      <span>
+        {' '}
+        · Last successful check:{' '}
+        <time>{listing.sourceCheckedAt ?? 'Unknown'}</time>
+      </span>
       <LocationUncertainty listing={listing} />
       {listing.location.kind === 'verified' && (
         <span>
@@ -474,7 +479,8 @@ export default function AreaMap() {
               <p>
                 Coverage {matchingResults.coverage.status}; configured sources
                 only, never complete inventory. Last successful covering check:{' '}
-                {matchingResults.coverage.lastSuccessfulCheckAt ?? 'Unknown'}.
+                {matchingResults.coverage.lastSuccessfulCheckAt ?? 'Unknown'}.{' '}
+                Fresh until: {matchingResults.coverage.freshUntil ?? 'Unknown'}.
               </p>
               {matchingResults.coverage.caveats.map((caveat, index) => (
                 <p key={index}>{caveat}</p>
