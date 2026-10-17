@@ -129,7 +129,42 @@ test('refresh attaches to ordinary work and follows queued rechecks to final req
       state: 'cancelled',
       pendingFollowUp: false,
     })
-    expect(cancelledRequest.jobIds).toEqual(cancelledRefresh.jobIds)
+    // Ordinary work can settle and atomically link its one follow-up between
+    // our pending snapshot and the UI cancellation. That is valid; withdrawal
+    // must cancel any newly exclusive follow-up and never reopen the intent.
+    expect(
+      cancelledRequest.jobIds.slice(0, cancelledRefresh.jobIds.length),
+    ).toEqual(cancelledRefresh.jobIds)
+    const linkedFollowUps = cancelledRequest.jobIds.slice(
+      cancelledRefresh.jobIds.length,
+    )
+    expect(linkedFollowUps.length).toBeLessThanOrEqual(1)
+    for (const id of linkedFollowUps) {
+      const followUp = await page.evaluate(
+        (id) => window.openAkiya.inspectImport(id),
+        id,
+      )
+      expect(followUp.state).toBe('cancelled')
+      expect(followUp.cancelRequestedAt).not.toBeNull()
+    }
+    await page.reload()
+    await expect(
+      page.getByRole('listitem', {
+        name: `Import request ${cancelledRefresh.id}`,
+        exact: true,
+      }),
+    ).toContainText('Refresh cancelled · Saved results retained.')
+    expect(
+      await page.evaluate(
+        (id) => window.openAkiya.inspectImportRequest(id),
+        cancelledRefresh.id,
+      ),
+    ).toEqual(cancelledRequest)
+    expect(
+      await page.evaluate(() =>
+        window.openAkiya.listImports({ state: 'active' }),
+      ),
+    ).toEqual({ jobs: [] })
   } finally {
     await application.close()
     rmSync(directory, { recursive: true, force: true })
