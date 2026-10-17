@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { fork, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { build } from 'vite'
@@ -356,5 +356,40 @@ test('repeated process interruption charges every outbound attempt and exhausts 
     expect(saved.results.listings).toEqual([])
   } finally {
     await recovered.kill()
+  }
+})
+
+test('lease takeover between the ownership read and accounting cannot overwrite current progress', async () => {
+  const path = join(directory, 'account-race.sqlite')
+  const stale = new Worker(path, 'account-race')
+  let current: Worker | undefined
+  try {
+    await stale.event('ready')
+    const request = await stale.call<ImportRequest>(
+      'createImportRequest',
+      input,
+    )
+    await stale.event('clock-check')
+    current = new Worker(path, 'before-commit', 100000)
+    await current.event('ready')
+    await current.call('inspectImportRequest', request.id)
+    await current.call('inspectImport', request.jobIds[0])
+    await current.event('boundary')
+    const owned = await current.call<Snapshot>('snapshot')
+    expect(owned.job.budget).toMatchObject({ discoveryUsed: 1, detailUsed: 1 })
+    writeFileSync(`${path}.release-clock`, '')
+    const oldView = await stale.call<Snapshot>('snapshot')
+    expect(oldView.job).toEqual(owned.job)
+    expect(oldView.starts).toEqual([])
+    await current.call('release')
+    const saved = await finish(current, request)
+    expect(saved.job).toMatchObject({
+      counts: { discovered: 2, checked: 2, added: 2 },
+      budget: { discoveryUsed: 1, detailUsed: 2 },
+    })
+  } finally {
+    writeFileSync(`${path}.release-clock`, '')
+    await stale.kill()
+    await current?.kill()
   }
 })
