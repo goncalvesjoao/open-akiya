@@ -201,6 +201,49 @@ export default function ImportControls({
       clearTimeout(timer)
     }
   }, [])
+  async function continueSearch(job: Job) {
+    setCreating(true)
+    setError('')
+    const scope = `continue:${job.id}`
+    if (pendingAction.current?.scope !== scope)
+      pendingAction.current = { scope, key: crypto.randomUUID() }
+    try {
+      const accepted = await window.openAkiya.createImportRequest({
+        intent: 'continue',
+        fromJobId: job.id,
+        idempotencyKey: pendingAction.current.key,
+      })
+      revision.current++
+      retainedRequests.current.add(accepted.id)
+      saveRecovery('import-last-request-id', accepted.id)
+      saveRecovery('import-request-ids', [...retainedRequests.current])
+      for (const id of accepted.jobIds) retainedJobs.current.add(id)
+      saveRecovery('import-job-ids', [...retainedJobs.current])
+      requests.current.set(accepted.id, accepted)
+      setRequestHistory((history) => [
+        ...history.filter((item) => item.id !== accepted.id),
+        accepted,
+      ])
+      requestRef.current = accepted.id
+      setRequest(accepted)
+      pendingAction.current = null
+      if (isTerminal(accepted.state)) settled.current()
+    } catch (failure) {
+      const code =
+        failure && typeof failure === 'object' && 'code' in failure
+          ? String(failure.code)
+          : 'TRANSPORT_ERROR'
+      setError(
+        code === 'JOB_NOT_TERMINAL'
+          ? 'This search is still running. Inspect its current state before continuing.'
+          : code === 'NOT_CONTINUABLE'
+            ? 'This search has no saved work available to continue. Saved results remain available.'
+            : 'Could not continue search. Saved results remain available; retry the same action safely.',
+      )
+    } finally {
+      setCreating(false)
+    }
+  }
   return (
     <section aria-label="Area imports" className="imports">
       {(['import', 'manual_refresh'] as const).map((intent) => (
@@ -338,7 +381,9 @@ export default function ImportControls({
                   : job.state === 'cancelled'
                     ? 'Cancelled'
                     : job.state === 'partial'
-                      ? 'Partial results'
+                      ? job.continuation.available
+                        ? 'Partial results—continue search'
+                        : 'Partial results'
                       : job.state}
             </strong>{' '}
             · Job area: {job.area.center.latitude}, {job.area.center.longitude}{' '}
@@ -358,6 +403,45 @@ export default function ImportControls({
               Coverage {job.coverage.status} · Last successful check:{' '}
               {job.coverage.lastSuccessfulCheckAt ?? 'Unknown'}
             </p>
+            <p>
+              Fresh until: {job.coverage.freshUntil ?? 'Unknown'}. Saved results
+              are retained throughout search failures and continuation.
+            </p>
+            {job.reasons.includes('BUDGET_EXHAUSTED') && (
+              <p>
+                Request budget reached; discovery or listing checks remain
+                incomplete. Saved results are partial.
+              </p>
+            )}
+            {job.reasons.length > 0 && (
+              <p>Search outcome: {job.reasons.join(', ')}</p>
+            )}
+            {(job.continuation.restarted ||
+              job.continuation.restartReason ||
+              job.reasons.some(
+                (reason) =>
+                  reason === 'CURSOR_EXPIRED' || reason === 'CURSOR_INVALID',
+              )) && (
+              <p>
+                Saved discovery progress expired or was invalid; discovery
+                restarted within the job budget (
+                {job.continuation.restartReason ??
+                  job.reasons
+                    .filter((reason) => reason.startsWith('CURSOR_'))
+                    .join(', ')}
+                ). Previously saved results remain available.
+              </p>
+            )}
+            {isTerminal(job.state) &&
+              job.state !== 'succeeded' &&
+              job.continuation.available && (
+                <button
+                  disabled={creating}
+                  onClick={() => void continueSearch(job)}
+                >
+                  Continue search
+                </button>
+              )}
             {job.coverage.caveats.map((caveat) => (
               <p key={caveat}>{caveat}</p>
             ))}
@@ -408,7 +492,8 @@ export default function ImportControls({
       </ul>
       <p>
         Sample source only. Source coverage is unknown; finished imports do not
-        establish real inventory.
+        establish real inventory. Configured discovery coverage is not
+        exhaustive real-world inventory.
       </p>
     </section>
   )

@@ -931,3 +931,123 @@ test('cancels queued refresh follow-up execution explicitly', async () => {
   expect(await screen.findByText('Cancelled')).toBeVisible()
   expect(api.cancelImportRequest).not.toHaveBeenCalled()
 })
+
+test('continues eligible saved work with a retry-safe originating job action', async () => {
+  const { continuationFixtures: fixtures } =
+    await import('../../shared/continuation-fixtures')
+  localStorage.setItem('import-job-ids', JSON.stringify([fixtures.partial.id]))
+  const create = vi
+    .fn()
+    .mockRejectedValueOnce({ code: 'TRANSPORT_ERROR' })
+    .mockResolvedValue(fixtures.continuedRequest)
+  setup({
+    inspectImport: vi.fn(async () => fixtures.partial),
+    createImportRequest: create,
+  })
+  render(
+    <ImportControls
+      area={{ ...initialArea, radiusKm: 1 }}
+      onSettled={() => {}}
+    />,
+  )
+  const button = await screen.findByRole('button', { name: 'Continue search' })
+  fireEvent.click(button)
+  expect(await screen.findByRole('alert')).toHaveTextContent('retry')
+  fireEvent.click(button)
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(2))
+  expect(create.mock.calls[0][0]).toEqual({
+    intent: 'continue',
+    fromJobId: fixtures.partial.id,
+    idempotencyKey: expect.any(String),
+  })
+  expect(create.mock.calls[1][0]).toEqual(create.mock.calls[0][0])
+})
+
+test('announces persisted cursor restart and truthful success without using listing counts', async () => {
+  const { continuationFixtures: f } =
+    await import('../../shared/continuation-fixtures')
+  localStorage.setItem(
+    'import-job-ids',
+    JSON.stringify([f.restartedSucceeded.id]),
+  )
+  setup({ inspectImport: vi.fn(async () => f.restartedSucceeded) })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  expect(await screen.findByText('Search finished')).toBeVisible()
+  expect(
+    screen.getByText(/Saved discovery progress expired/),
+  ).toHaveTextContent('CURSOR_EXPIRED')
+  expect(screen.getByText(/Fresh until:/)).toHaveTextContent(
+    '2026-10-16T00:01:05Z',
+  )
+  expect(
+    screen.queryByRole('button', { name: 'Continue search' }),
+  ).not.toBeInTheDocument()
+})
+
+for (const code of ['JOB_NOT_TERMINAL', 'NOT_CONTINUABLE']) {
+  test(`explains ${code} without dropping saved job state`, async () => {
+    const { continuationFixtures: f } =
+      await import('../../shared/continuation-fixtures')
+    localStorage.setItem('import-job-ids', JSON.stringify([f.cancelled.id]))
+    const api = setup({
+      inspectImport: vi.fn(async () => f.cancelled),
+      createImportRequest: vi.fn(async () => {
+        throw { code }
+      }),
+    })
+    render(<ImportControls area={initialArea} onSettled={() => {}} />)
+    const button = await screen.findByRole('button', {
+      name: 'Continue search',
+    })
+    expect(api.createImportRequest).not.toHaveBeenCalled()
+    fireEvent.click(button)
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      code === 'JOB_NOT_TERMINAL' ? 'still running' : 'no saved work',
+    )
+    expect(screen.getByText('Cancelled')).toBeVisible()
+  })
+}
+
+test('does not offer continuation for ineligible failed or active jobs', async () => {
+  const { continuationFixtures: f } =
+    await import('../../shared/continuation-fixtures')
+  localStorage.setItem('import-job-ids', JSON.stringify([f.failed.id]))
+  setup({
+    inspectImport: vi.fn(async () => ({
+      ...f.failed,
+      continuation: { ...f.failed.continuation, available: false },
+    })),
+    listImports: vi.fn(async () => ({
+      jobs: [
+        {
+          ...f.queued,
+          continuation: { ...f.queued.continuation, available: true },
+        },
+      ],
+    })),
+  })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  expect(await screen.findByText('Failed')).toBeVisible()
+  expect(
+    screen.queryByRole('button', { name: 'Continue search' }),
+  ).not.toBeInTheDocument()
+  expect(
+    screen
+      .getAllByText(/Last successful check:/)
+      .every((element) => element.textContent?.includes('Unknown')),
+  ).toBe(true)
+})
+
+test('explains bounded truncation and configured discovery coverage limits', async () => {
+  const { continuationFixtures: f } =
+    await import('../../shared/continuation-fixtures')
+  localStorage.setItem('import-job-ids', JSON.stringify([f.partial.id]))
+  setup({ inspectImport: vi.fn(async () => f.partial) })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  expect(await screen.findByText(/Request budget reached/)).toHaveTextContent(
+    'incomplete',
+  )
+  expect(screen.getByText(/Configured discovery coverage/)).toHaveTextContent(
+    'not exhaustive',
+  )
+})
