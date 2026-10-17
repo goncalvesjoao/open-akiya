@@ -16,7 +16,13 @@ const fastTest = process.env.OPEN_AKIYA_TEST_FAST === '1'
 // Keep detail work observable in the real import journey while source pacing
 // still uses the controlled clock; this switch is ignored outside test mode.
 const delay =
-  fastTest && process.env.OPEN_AKIYA_TEST_IMPORT_PROGRESS !== '1' ? 0 : 300
+  fastTest &&
+  process.env.OPEN_AKIYA_TEST_HIDDEN === '1' &&
+  process.env.OPEN_AKIYA_TEST_IMPORT_QUEUE === '1'
+    ? 4000
+    : fastTest && process.env.OPEN_AKIYA_TEST_IMPORT_PROGRESS !== '1'
+      ? 0
+      : 300
 const runtime = new ImportRuntime(process.argv[2], delay, {
   ...(fastTest ? testClock() : {}),
   adapters: [
