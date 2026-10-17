@@ -8,7 +8,8 @@ import {
   municipalityFixtures,
   unknownFixtures,
 } from './fixtures'
-import { safeError } from './errors'
+import { LocalApiError, safeError } from './errors'
+import { wait } from './transport'
 import type { WorkerRequest } from '../shared/desktop'
 
 // Synthetic E2E imports advance pacing without waiting on wall time.
@@ -30,10 +31,24 @@ const adapter = syntheticAdapter(delay, [
   ...uncertainFixtures,
   ...municipalityFixtures,
   ...unknownFixtures,
+  fixtures[3],
 ])
 const runtime = new ImportRuntime(process.argv[2], delay, {
   ...(fastTest ? testClock() : {}),
   ...(manualRefreshTest ? { areaFreshnessMs: 0 } : {}),
+  // Fail real counted source attempts, without replacing IPC, scheduling or reads.
+  ...(fastTest && process.env.OPEN_AKIYA_TEST_SOURCE_FAILURE === '1'
+    ? {
+        transport: async (url: string, options: RequestInit) => {
+          if (url.endsWith('/discovery')) await wait(1500, options.signal!)
+          throw new LocalApiError(
+            409,
+            'SOURCE_BLOCKED',
+            'Synthetic source unavailable',
+          )
+        },
+      }
+    : {}),
   // Exercise bounded discovery through the real desktop worker in synthetic tests.
   ...(fastTest && process.env.OPEN_AKIYA_TEST_CONTINUATION === '1'
     ? { detailLimit: 1 }

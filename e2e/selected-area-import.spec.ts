@@ -1,3 +1,4 @@
+import { controlledTiles } from './controlled-tiles'
 import { _electron as electron, expect, test } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,6 +9,7 @@ import type { AddressInfo } from 'node:net'
 // This journey requires real Electron to exercise sandboxed preload IPC,
 // the utility-process SQLite connection and persisted data after app relaunch.
 test('imports the explicitly selected synthetic area and retains saved results after reload and relaunch', async () => {
+  test.setTimeout(60000)
   const directory = mkdtempSync(join(tmpdir(), 'akiya-electron-'))
   const lookups: string[] = []
   const provider = createServer((request, response) => {
@@ -29,7 +31,7 @@ test('imports the explicitly selected synthetic area and retains saved results a
   async function launch() {
     const application = await electron.launch({
       args: [
-        '--host-resolver-rules=MAP *.tile.openstreetmap.org 127.0.0.1',
+        '--host-resolver-rules=MAP tile.openstreetmap.org 127.0.0.1, MAP *.tile.openstreetmap.org 127.0.0.1',
         'out/main/index.cjs',
       ],
       env: {
@@ -40,7 +42,7 @@ test('imports the explicitly selected synthetic area and retains saved results a
         OPEN_AKIYA_LOCATION_SEARCH_URL: endpoint,
       },
     })
-    await application.context().route('https://**/*', (route) => route.abort())
+    await controlledTiles(application.context())
     const page = await application.firstWindow()
     expect(
       await application.evaluate(({ BrowserWindow }) =>
@@ -53,6 +55,9 @@ test('imports the explicitly selected synthetic area and retains saved results a
   try {
     await expect(
       session.page.getByRole('heading', { name: 'Open Akiya', exact: true }),
+    ).toBeVisible()
+    await expect(
+      session.page.locator('.leaflet-tile-loaded').first(),
     ).toBeVisible()
     // Search is exercised over real sandbox IPC and worker HTTP, with a controlled
     // local provider. Leaflet circle geometry and narrow layout require a browser.
@@ -120,6 +125,44 @@ test('imports the explicitly selected synthetic area and retains saved results a
         exact: true,
       }),
     ).toHaveCount(0)
+    // Panning/zooming are exploration, never collection. Observe both active
+    // execution and saved data so a fast completed import cannot escape detection.
+    const map = session.page.getByRole('region', {
+      name: 'Interactive synthetic map',
+    })
+    const bounds = await map.boundingBox()
+    await session.page.mouse.move(
+      bounds!.x + bounds!.width / 2,
+      bounds!.y + bounds!.height / 2,
+    )
+    await session.page.mouse.down()
+    await session.page.mouse.move(
+      bounds!.x + bounds!.width / 2 + 60,
+      bounds!.y + bounds!.height / 2,
+      { steps: 8 },
+    )
+    await session.page.mouse.up()
+    await session.page
+      .getByRole('button', { name: 'Zoom in', exact: true })
+      .click()
+    // Allow more than one detail delay and a renderer polling interval.
+    await session.page.waitForTimeout(1000)
+    expect(
+      await session.page.evaluate(() =>
+        window.openAkiya.listImports({ state: 'active' }),
+      ),
+    ).toEqual({ jobs: [] })
+    expect(
+      await session.page.evaluate(
+        async () =>
+          (
+            await window.openAkiya.areaResults({
+              area: { center: { latitude: 35, longitude: 135 }, radiusKm: 5 },
+              showUnavailable: true,
+            })
+          ).listings,
+      ),
+    ).toEqual([])
     await session.page
       .getByRole('button', { name: 'Import sample listings' })
       .click()

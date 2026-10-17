@@ -1,3 +1,4 @@
+import { controlledTiles } from './controlled-tiles'
 import { _electron as electron, expect, test } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -10,7 +11,7 @@ test('refresh attaches to ordinary work and follows queued rechecks to final req
   const directory = mkdtempSync(join(tmpdir(), 'akiya-refresh-'))
   const application = await electron.launch({
     args: [
-      '--host-resolver-rules=MAP *.tile.openstreetmap.org 127.0.0.1',
+      '--host-resolver-rules=MAP tile.openstreetmap.org 127.0.0.1, MAP *.tile.openstreetmap.org 127.0.0.1',
       'out/main/index.cjs',
     ],
     env: {
@@ -22,7 +23,7 @@ test('refresh attaches to ordinary work and follows queued rechecks to final req
     },
   })
   try {
-    await application.context().route('https://**/*', (route) => route.abort())
+    await controlledTiles(application.context())
     const page = await application.firstWindow()
     await page.setViewportSize({ width: 1200, height: 1800 })
     await page.getByRole('button', { name: 'Import sample listings' }).click()
@@ -94,6 +95,41 @@ test('refresh attaches to ordinary work and follows queued rechecks to final req
         exact: true,
       }),
     ).toBeVisible()
+    // A later refresh remains cancellable while ordinary discovery owns work.
+    await page.getByRole('button', { name: 'Import sample listings' }).click()
+    await page.getByRole('button', { name: 'Refresh anyway' }).click()
+    const cancelledRefresh = await page.evaluate(async () => {
+      const id = JSON.parse(localStorage.getItem('import-last-request-id')!)
+      return window.openAkiya.inspectImportRequest(id)
+    })
+    expect(cancelledRefresh.pendingFollowUp).toBe(true)
+    await page
+      .getByRole('listitem', {
+        name: `Import request ${cancelledRefresh.id}`,
+        exact: true,
+      })
+      .getByRole('button', { name: 'Cancel request intent' })
+      .click()
+    await expect(
+      page.getByRole('listitem', {
+        name: `Import request ${cancelledRefresh.id}`,
+        exact: true,
+      }),
+    ).toContainText('Refresh cancelled · Saved results retained.')
+    await expect
+      .poll(() =>
+        page.evaluate(() => window.openAkiya.listImports({ state: 'active' })),
+      )
+      .toEqual({ jobs: [] })
+    const cancelledRequest = await page.evaluate(
+      (id) => window.openAkiya.inspectImportRequest(id),
+      cancelledRefresh.id,
+    )
+    expect(cancelledRequest).toMatchObject({
+      state: 'cancelled',
+      pendingFollowUp: false,
+    })
+    expect(cancelledRequest.jobIds).toEqual(cancelledRefresh.jobIds)
   } finally {
     await application.close()
     rmSync(directory, { recursive: true, force: true })

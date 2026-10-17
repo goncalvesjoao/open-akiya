@@ -1,3 +1,4 @@
+import { controlledTiles } from './controlled-tiles'
 import { _electron as electron, expect, test } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,7 +9,7 @@ test('explores municipality summary markers and list-only groups without house p
   const directory = mkdtempSync(join(tmpdir(), 'akiya-municipality-'))
   const application = await electron.launch({
     args: [
-      '--host-resolver-rules=MAP *.tile.openstreetmap.org 127.0.0.1',
+      '--host-resolver-rules=MAP tile.openstreetmap.org 127.0.0.1, MAP *.tile.openstreetmap.org 127.0.0.1',
       'out/main/index.cjs',
     ],
     env: {
@@ -17,7 +18,7 @@ test('explores municipality summary markers and list-only groups without house p
       OPEN_AKIYA_TEST_DATA: directory,
     },
   })
-  await application.context().route('https://**/*', (route) => route.abort())
+  await controlledTiles(application.context())
   const page = await application.firstWindow()
   try {
     await page.getByRole('button', { name: 'Import sample listings' }).click()
@@ -98,6 +99,46 @@ test('explores municipality summary markers and list-only groups without house p
     await expect(
       page.getByRole('button', {
         name: /Municipality summary: Sample municipality without a point ·/,
+      }),
+    ).toHaveCount(0)
+    // The municipal office is about 11 km from the selected center, outside
+    // its 5 km circle. Membership comes from municipality intersection instead.
+    const projection = await page.evaluate(() =>
+      window.openAkiya.areaResults({
+        area: { center: { latitude: 35, longitude: 135 }, radiusKm: 5 },
+        showUnavailable: false,
+      }),
+    )
+    expect(projection.municipalityGroups[0]).toMatchObject({
+      count: 2,
+      representativePoint: { latitude: 35.1, longitude: 135 },
+    })
+    expect(new Set(projection.listings.map((listing) => listing.id)).size).toBe(
+      projection.listings.length,
+    )
+    await page.getByLabel('Show unavailable').check()
+    await expect(group).toContainText('Sample municipality · 3 listings')
+    await expect(
+      page.getByRole('button', {
+        name: 'Unavailable sample listing',
+        exact: true,
+      }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole('button', {
+        name: 'Pin: Unavailable sample listing',
+        exact: true,
+      }),
+    ).toBeVisible()
+    await expect(
+      page.getByRole('list', { name: 'Unknown location' }),
+    ).toContainText('Unavailable unknown-location sample listing')
+    await page.getByLabel('Show unavailable').uncheck()
+    await expect(group).toContainText('Sample municipality · 2 listings')
+    await expect(
+      page.getByRole('button', {
+        name: 'Unavailable sample listing',
+        exact: true,
       }),
     ).toHaveCount(0)
     // Querying a distant area removes groups, including their representative marker.

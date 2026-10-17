@@ -17,7 +17,7 @@ The utility process owns the `node:sqlite` connection. SQLite WAL, foreign keys 
 
 Closing the window hides the application while imports continue. Launching it again restores the existing window. Explicit Quit stops scheduling and preserves committed progress. Restart recovers interrupted work; cancelled jobs remain cancelled. Work does not execute while the app is fully exited or the computer is asleep.
 
-`src/shared/desktop.ts` defines `createImportRequest`, `inspectImportRequest`, `inspectImport`, `cancelImport`, `cancelImportRequest`, `listImports({state: 'active'})` and `areaResults`. Requests and jobs have separate durable IDs and use the approved #5 DTOs. Both cancellation operations persist intent immediately, stop further source attempts, and preserve committed listings and counters. Running jobs remain running until active work settles; queued jobs cancel before dispatch. Request cancellation immediately detaches only that request and retains its cancellation timestamp. Other owners keep shared execution alive; cancelling the last owner requests cooperative job cancellation. Explicit job cancellation propagates to unfinished attached requests. Terminal requests never reopen. Creation accepts `intent: 'import'`, `intent: 'manual_refresh'` and explicit bounded `intent: 'continue'`. Manual refresh persists its original cutoff separately from shared execution, deduplicates pending intent and rechecks only offers without a successful check since that cutoff. Ordinary settlement atomically links at most one bounded follow-up in the visible queue; exhausted follow-ups require explicit continuation. Request inspection and `pendingFollowUp` govern refresh completion. Cancellation detaches shared work and stops exclusive follow-ups. `src/shared/manual-refresh-fixtures.ts` provides full shared snapshots for #7; the renderer's Refresh anyway control remains #7 work. Errors carry a sanitized code, message and retryability. Invalid requests are `INVALID_REQUEST`; unknown IDs are `NOT_FOUND`; conflicting keys are `IDEMPOTENCY_CONFLICT`; disabled sources are `NO_ENABLED_SOURCES`.
+`src/shared/desktop.ts` defines `createImportRequest`, `inspectImportRequest`, `inspectImport`, `cancelImport`, `cancelImportRequest`, `listImports({state: 'active'})` and `areaResults`. Requests and jobs have separate durable IDs and use the approved #5 DTOs. Both cancellation operations persist intent immediately, stop further source attempts, and preserve committed listings and counters. Running jobs remain running until active work settles; queued jobs cancel before dispatch. Request cancellation immediately detaches only that request and retains its cancellation timestamp. Other owners keep shared execution alive; cancelling the last owner requests cooperative job cancellation. Explicit job cancellation propagates to unfinished attached requests. Terminal requests never reopen. Creation accepts `intent: 'import'`, `intent: 'manual_refresh'` and explicit bounded `intent: 'continue'`. Manual refresh persists its original cutoff separately from shared execution, deduplicates pending intent and rechecks only offers without a successful check since that cutoff. Ordinary settlement atomically links at most one bounded follow-up in the visible queue; exhausted follow-ups require explicit continuation. Request inspection and `pendingFollowUp` govern refresh completion. Cancellation detaches shared work and stops exclusive follow-ups. `src/shared/manual-refresh-fixtures.ts` provides full shared snapshots consumed by UI control tests; the renderer exposes Refresh anyway and tracks request-level follow-up completion. Errors carry a sanitized code, message and retryability. Invalid requests are `INVALID_REQUEST`; unknown IDs are `NOT_FOUND`; conflicting keys are `IDEMPOTENCY_CONFLICT`; disabled sources are `NO_ENABLED_SOURCES`.
 
 The synthetic adapter independently discovers, fetches detail and normalizes one fixed offer at latitude 35, longitude 135. Other areas return a successful empty discovery rather than moving that offer. The worker persists actual discovery/detail request counts before dispatch; observation, approved listing projection, committed counts and candidate progress commit atomically. Repeated unchanged content has an `unchanged` count. Saved-data reads never invoke adapters. Ordinary imports reuse fresh complete successful covering work and independently reuse recent successful listing details. Area results expose persisted coverage evidence and its actual successful-check times; scoped completed discovery checkpoints support safe date stopping as described below.
 
@@ -27,10 +27,9 @@ New request/job/lease tables are additive (`*_v2`); existing listing IDs and sav
 
 ## Remaining requirements
 
-The current app imports fictional sample listings only. The base request/job contracts are implemented; parent #5 has additional child-ticket acceptance work. Outstanding work includes:
+The current app imports fictional sample listings only. The local request/job, refresh and continuation workflows are implemented. Outstanding live-source and distribution work includes:
 
-- Live source transport, robust field-patch/authoritative-null merging, invalid-observation handling and independent multi-source availability.
-- Manual-refresh follow-ups.
+- Permitted live-source transport and source-specific normalization.
 - Live municipality reference geometry and address/place lookup. Synthetic unverified pins, municipality summaries and unknown-location associations are implemented.
 - Permitted Tsubata integration, geographic-reference and identity validation, residential eligibility and a bounded live pilot.
 - Windows/macOS validation, installer signing/notarization, release icons and published installers.
@@ -85,8 +84,7 @@ attempt in its originating class. Neither reservation nor release enlarges it.
 The queue, completed identities, class attempt counts, configured reservation and
 next carried class survive worker restart. A one-attempt job chooses the carried
 class and records the opposite class after each attempted request, including
-failed attempts. Explicit continuation consumes this durable progress. Manual-refresh request
-creation remains #25 integration work; manual known-offer rechecks will use the refresh queue. Ordinary imports reuse fresh known-offer details under the policy below.
+failed attempts. Explicit continuation consumes this durable progress. Manual-refresh known-offer rechecks use this refresh queue. Ordinary imports reuse fresh known-offer details under the policy below.
 Deferred refreshes remain private saved work, and budget exhaustion is partial.
 
 ## Ordinary-import freshness
@@ -158,3 +156,52 @@ replacement traversal with all required work committed may promote a checkpoint.
 Continued ordinary imports restart typed `CURSOR_EXPIRED` and `CURSOR_INVALID` discovery within the remaining job budget. The rejected request remains charged, saved offers keep their identities, and fresh details remain reusable. Deferred stale-detail work survives the restart. Changed adapter, filter or geographic reference semantics restart affected saved sources with current fingerprints; an unavailable saved source fails configuration validation. Abandoned date-order evidence cannot establish a checkpoint. Restart flags, reasons and caveats persist through later successful continuation and database reopen. Shared running, exhausted and successful examples are in `src/shared/continuation-fixtures.ts`.
 
 Manual-refresh cursor restart retains the original request cutoff and deferred rechecks across exhausted bounded jobs and database reopen. Explicit continuation reuses successful checks since that cutoff, even when ordinary detail freshness has since expired. Both typed cursor failures have deterministic worker API verification in `src/main/cursor-manual.test.ts`.
+
+## Run the integrated synthetic workflow
+
+Use Node 24 or newer, run `npm ci`, then `npm run dev` in a graphical desktop
+session. The application uses the real sandboxed preload bridge, independent
+utility-process worker and local SQLite database; no server needs provisioning.
+All imported offers are fictional samples around 35, 135. The synthetic adapter
+never retrieves bank inventory. Map tiles and explicit place searches normally
+use their attributed external providers.
+
+1. Select a circle around 35, 135 (up to 10 km). Pan or zoom freely; only
+   **Import sample listings** or **Refresh anyway** requests collection.
+2. Import explicitly. Inspect the queue's immutable job area, stages, counters and
+   successful-check times. Change the selection or reload while work runs; the
+   request and job IDs reconnect to the same worker records.
+3. Explore the committed sale pin and companion list, unverified/approximate
+   source points, municipality summaries and unknown-location list. The fictional
+   municipal office at 35.1, 135 is outside the default circle and represents a
+   municipality, never an individual listing. **Show unavailable** filters saved
+   records and summary counts without collecting. **Original source** links are
+   validated synthetic references at `example.invalid`.
+4. Request **Refresh anyway** to bypass cache reuse. Attached work can leave a
+   refresh pending until its bounded follow-up completes. Cancel a request to
+   withdraw only that intent, or cancel a job to stop its execution. Use
+   **Continue search** explicitly when bounded work is incomplete. Saved results
+   and actual successful-check times remain available through failure/cancellation.
+5. Close the window to hide it while execution continues, then reopen via the
+   launcher. Use **Quit Open Akiya** to exit; relaunch recovers committed progress.
+   Cancelled work stays cancelled.
+
+Run `npm run test:e2e` for the fixture-backed Electron acceptance journeys. Each
+journey uses a disposable profile/database, controlled tile responses and synthetic
+source transport. The selected-area journey also uses a loopback place provider.
+No live bank requests run. The tests cover selection/import/progress/reconnect,
+location categories and unavailable filtering, queue/cancellation, refresh
+follow-ups (including withdrawing pending intent), bounded continuation, and
+failed refresh retaining saved pins and timestamps in the current selection.
+`query-recovery.spec.ts` deliberately controls the query response to exercise UI
+failure/focus behavior; it is supplementary and does not establish runtime
+integration. Scheduling/budget/race permutations remain at the worker API seam.
+
+Development-only fixture switches require `OPEN_AKIYA_TEST_DATA` (a disposable
+profile directory): `OPEN_AKIYA_TEST_IMPORT_PROGRESS=1` slows details;
+`OPEN_AKIYA_TEST_IMPORT_QUEUE=1` keeps queue work observable;
+`OPEN_AKIYA_TEST_MANUAL_REFRESH=1` disables area cache and delays discovery;
+`OPEN_AKIYA_TEST_CONTINUATION=1` limits each job to one detail attempt; and
+`OPEN_AKIYA_TEST_SOURCE_FAILURE=1` fails counted synthetic source attempts without
+changing saved-data reads. Test runtime configuration is ignored in packaged apps.
+These controls exercise the existing worker, not another scheduling implementation.

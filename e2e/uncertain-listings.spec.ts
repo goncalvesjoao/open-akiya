@@ -1,3 +1,4 @@
+import { controlledTiles } from './controlled-tiles'
 import { _electron as electron, expect, test } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,7 +9,7 @@ test('explores uncertain source-point candidates with synchronized pins, results
   const directory = mkdtempSync(join(tmpdir(), 'akiya-uncertain-'))
   const application = await electron.launch({
     args: [
-      '--host-resolver-rules=MAP *.tile.openstreetmap.org 127.0.0.1',
+      '--host-resolver-rules=MAP tile.openstreetmap.org 127.0.0.1, MAP *.tile.openstreetmap.org 127.0.0.1',
       'out/main/index.cjs',
     ],
     env: {
@@ -17,7 +18,7 @@ test('explores uncertain source-point candidates with synchronized pins, results
       OPEN_AKIYA_TEST_DATA: directory,
     },
   })
-  await application.context().route('https://**/*', (route) => route.abort())
+  await controlledTiles(application.context())
   const page = await application.firstWindow()
   try {
     await page.getByRole('button', { name: 'Import sample listings' }).click()
