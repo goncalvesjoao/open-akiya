@@ -844,3 +844,82 @@ test('worker shutdown recovers an interrupted acquired snapshot without replayin
     rmSync(directory, { recursive: true, force: true })
   }
 })
+
+test.each([401, 403, 'challenge'] as const)(
+  'stale and manual refresh stop all source work after the first %s block and retain pending checks',
+  async (block) => {
+    for (const intent of ['import', 'manual_refresh'] as const) {
+      const clock = testClock(0)
+      let blocked = false
+      let attempts = 0
+      const runtime = openRuntime(':memory:', 0, {
+        ...clock,
+        adapters: [adapter()],
+        transport: async () => {
+          attempts++
+          return blocked
+            ? {
+                status: block === 'challenge' ? 200 : block,
+                body:
+                  block === 'challenge'
+                    ? '<html>CAPTCHA: verify you are human</html>'
+                    : 'blocked',
+              }
+            : { status: 200, body: csv + row('000000002') }
+        },
+      })
+      runtimes.push(runtime)
+      const seed = runtime.createRequest({
+        area: initialArea,
+        intent: 'import',
+        idempotencyKey: 'seed-before-block',
+      })
+      await expect
+        .poll(() => runtime.inspect(seed.jobIds[0]).stage)
+        .toBe('finished')
+      const saved = runtime.results({
+        area: initialArea,
+        showUnavailable: true,
+      }).listings
+      clock.advance(86400001)
+      blocked = true
+      attempts = 0
+      const request = runtime.createRequest({
+        area: initialArea,
+        intent,
+        idempotencyKey: `blocked-${intent}`,
+      })
+      await expect
+        .poll(() => runtime.inspect(request.jobIds[0]).stage)
+        .toBe('finished')
+      const terminal = runtime.inspect(request.jobIds[0])
+      expect(terminal).toMatchObject({
+        state: 'failed',
+        error: { code: 'SOURCE_BLOCKED' },
+        counts: { checked: 0 },
+        budget: { discoveryUsed: 1, detailUsed: 0 },
+        continuation: { available: true },
+      })
+      expect(attempts).toBe(1)
+      expect(
+        runtime.results({ area: initialArea, showUnavailable: true }).listings,
+      ).toEqual(saved)
+      blocked = false
+      const next = runtime.createRequest({
+        intent: 'continue',
+        fromJobId: terminal.id,
+        idempotencyKey: 'continue-blocked-checks',
+      })
+      await expect
+        .poll(() => runtime.inspect(next.jobIds[0]).stage)
+        .toBe('finished')
+      expect(runtime.inspect(next.jobIds[0])).toMatchObject({
+        state: 'succeeded',
+        counts: { checked: 2 },
+        budget: { discoveryUsed: 1, detailUsed: 0 },
+      })
+      expect(runtime.inspect(terminal.id)).toEqual(terminal)
+      await runtime.close()
+    }
+  },
+)

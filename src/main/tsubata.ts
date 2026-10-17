@@ -2,9 +2,11 @@ import { createHash } from 'node:crypto'
 import type { Candidate, NormalizedFields, SourceAdapter } from './adapter'
 import type { SelectedArea } from '../shared/listings'
 import { LocalApiError } from './errors'
-import { acquireTsubataSnapshot } from './tsubata-snapshot'
-export const TSUBATA_EXPORT =
-  'https://www.town.tsubata.lg.jp/division/file/opendata/173614_empty_bank.csv'
+import {
+  acquireTsubataSnapshot,
+  tsubataExportUrl as TSUBATA_EXPORT,
+} from './tsubata-snapshot'
+export { TSUBATA_EXPORT }
 const version = 'tsubata-csv-v1'
 const hash = (value: unknown) =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex')

@@ -2008,6 +2008,14 @@ export class ImportRuntime {
           adapter.capabilities.sourceId ===
           job.sources[task.sourceIndex].sourceId,
       )!
+      if (job.sources[task.sourceIndex].error?.code === 'SOURCE_BLOCKED') {
+        // An access block stops every remaining operation for this source in
+        // this job. Keep its unfinished refresh checks for explicit continuation.
+        ;(progress.deferredRefresh ??= []).push(task)
+        progress.refreshIndex!++
+        this.saveProgress(job, progress)
+        continue
+      }
       if (
         job.budget.detailUsed >= limit &&
         !this.freshObservation(adapter, task.candidate, progress.refreshCutoff)
@@ -2350,6 +2358,8 @@ export class ImportRuntime {
           }
         }
         try {
+          if (source.error?.code === 'SOURCE_BLOCKED')
+            throw new LocalApiError(409, 'SOURCE_BLOCKED', source.error.message)
           if (adapter.capabilities.geography === 'unsupported')
             throw new LocalApiError(
               409,
