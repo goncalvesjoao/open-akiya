@@ -166,7 +166,8 @@ export function loadTsubataGeography(
     if (statSync(path).size > 32 * 1024 * 1024)
       return invalid('Municipal reference exceeds byte limit')
     bytes = readFileSync(path)
-  } catch {
+  } catch (error) {
+    if (error instanceof LocalApiError) throw error
     return invalid('Private municipal reference file unavailable')
   }
   const checksum = createHash('sha256').update(bytes).digest('hex')

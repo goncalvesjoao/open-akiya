@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from 'node:crypto'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, expect, test } from 'vitest'
@@ -166,5 +166,16 @@ test('an unavailable or unpinned private reference cannot configure discovery', 
   writeFileSync(path, '{}')
   expect(() => loadTsubataGeography(path)).toThrow(
     'Private municipal reference checksum mismatch',
+  )
+})
+
+test('an oversized private reference reports its byte limit instead of an unavailable file', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'tsubata-oversized-'))
+  directories.push(directory)
+  const path = join(directory, 'reference.json')
+  writeFileSync(path, '')
+  truncateSync(path, 32 * 1024 * 1024 + 1)
+  expect(() => loadTsubataGeography(path)).toThrow(
+    'Municipal reference exceeds byte limit',
   )
 })
