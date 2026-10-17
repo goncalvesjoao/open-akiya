@@ -101,6 +101,7 @@ function usefulProgress(progress: Progress, errorCode?: string): boolean {
   )
 }
 type RuntimeOptions = TransportOptions & {
+  municipalityReference?: typeof municipalityReference
   adapters?: SourceAdapter[]
   now?: () => number
   leaseMs?: number
@@ -119,6 +120,7 @@ type RuntimeOptions = TransportOptions & {
 export class ImportRuntime {
   private db: DatabaseSync
   private readonly owner = randomUUID()
+  private readonly municipalityReference: typeof municipalityReference
   private readonly adapters: SourceAdapter[]
   private readonly areaFreshnessMs: number
   private readonly detailFreshnessMs: number
@@ -144,6 +146,8 @@ export class ImportRuntime {
     if (!Number.isSafeInteger(this.byteLimit) || this.byteLimit < 1) invalid('Invalid byte budget')
     this.rowLimit = options.rowLimit ?? 1000
     if (!Number.isSafeInteger(this.rowLimit) || this.rowLimit < 1) invalid('Invalid row budget')
+    this.municipalityReference =
+      options.municipalityReference ?? municipalityReference
     this.limits = {
       discoveryLimit: options.discoveryLimit ?? 10,
       detailLimit: options.detailLimit ?? 100,
@@ -1118,13 +1122,20 @@ export class ImportRuntime {
                 const scope: SelectedArea = JSON.parse(String(row.area))
                 return areasIntersect(area, scope)
               })
-          : locationMatchesArea(listing.location, area)),
+          : listing.location.kind === 'municipality'
+            ? Boolean(
+                this.municipalityReference(
+                  listing.location.municipalityId,
+                  area,
+                ),
+              )
+            : locationMatchesArea(listing.location, area)),
     )
     const groups = new Map<string, MunicipalityGroup>()
     for (const listing of visible) {
       if (listing.location.kind !== 'municipality') continue
       const municipalityId = listing.location.municipalityId
-      const reference = municipalityReference(municipalityId, area)!
+      const reference = this.municipalityReference(municipalityId, area)!
       const group = groups.get(municipalityId) ?? {
         municipalityId,
         nameJa: listing.municipalityNameJa ?? municipalityId,
@@ -1274,7 +1285,10 @@ export class ImportRuntime {
         signal: this.controller!.signal,
         now: this.now,
         ensure: () => this.ensure(job),
-        options: { ...this.transportOptions, minimumIntervalMs: Math.max(this.transportOptions.minimumIntervalMs ?? 2000, adapter.capabilities.minimumIntervalMs ?? 2000) },
+        options: {
+          ...this.transportOptions,
+          minimumIntervalMs: Math.max(this.transportOptions.minimumIntervalMs ?? 2000, adapter.capabilities.minimumIntervalMs ?? 2000),
+        },
         queue: this.transportQueue,
         next: (host) =>
           Math.max(
@@ -1422,6 +1436,27 @@ export class ImportRuntime {
         observation.identity.externalId,
         candidate.transactionType,
       )
+    if (observation.identityEvidence) {
+      const witness = observation.identityEvidence
+      if (
+        !/^[a-f0-9]{64}$/.test(witness.fingerprint) ||
+        !witness.description?.trim()
+      )
+        invalid('Invalid identity witness')
+      for (const row of this.db
+        .prepare(
+          'SELECT external_id,data FROM offer_observations WHERE source_id=? AND transaction_type=?',
+        )
+        .all(observation.identity.sourceId, candidate.transactionType)) {
+        const prior: SourceObservation = JSON.parse(String(row.data))
+        if (!prior.identityEvidence) continue
+        const sameId = row.external_id === observation.identity.externalId
+        const sameWitness =
+          prior.identityEvidence.fingerprint === witness.fingerprint
+        if (sameId !== sameWitness)
+          invalid('Suspicious source rekey or reassignment; quarantined')
+      }
+    }
     const duplicate = observation.confirmedDuplicateOf
     if (duplicate !== undefined) {
       if (
@@ -1493,7 +1528,7 @@ export class ImportRuntime {
     const source = {
       sourceId: observation.identity.sourceId,
       externalId: observation.identity.externalId,
-      name: 'Sample source',
+      name: adapter.capabilities.sourceName ?? 'Sample source',
       url: observation.url,
     }
     const listing: ListingProjection = listingProjection({
