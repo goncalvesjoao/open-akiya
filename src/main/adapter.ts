@@ -14,6 +14,8 @@ import {
 import { locationMatchesArea } from './listing-area'
 
 export type AdapterCapabilities = {
+  sourceName?: string
+  minimumIntervalMs?: number
   sourceId: string
   adapterVersion: string
   queryVersion: string
@@ -60,6 +62,7 @@ export type NormalizedFields = Omit<
   | 'sourceCheckedAt'
 >
 export type SourceObservation = {
+  identityEvidence?: { fingerprint: string; description: string }
   confirmedDuplicateOf?: {
     sourceId: string
     externalId: string
