@@ -88,16 +88,12 @@ function records(body: unknown): Record<string, string>[] {
 }
 const identity = (r: Record<string, string>) =>
   `${r['全国地方公共団体コード']}:${r.ID}`
+const addressParts = (r: Record<string, string>) =>
+  ['所在地_都道府県', '所在地_市区町村', '所在地_町字', '所在地_番地以下'].map(
+    (k) => r[k] ?? '',
+  )
 const witness = (r: Record<string, string>) =>
-  hash([
-    [
-      '所在地_都道府県',
-      '所在地_市区町村',
-      '所在地_町字',
-      '所在地_番地以下',
-    ].map((k) => r[k] ?? ''),
-    r['構造'],
-  ])
+  hash([addressParts(r), r['構造']])
 const variant = (r: Record<string, string>) =>
   r['契約形態'] === '売買'
     ? 'sale'
@@ -234,12 +230,7 @@ export function tsubataAdapter(options?: {
       }
       if (type === 'rent' && amount !== null && note !== '金額は月額')
         return reject('Monthly rent evidence missing')
-      const address = [
-        '所在地_都道府県',
-        '所在地_市区町村',
-        '所在地_町字',
-        '所在地_番地以下',
-      ].map((k) => r[k] ?? '')
+      const address = addressParts(r)
       if (!address.some(Boolean)) return reject('Identity witness unavailable')
       const fields: Partial<NormalizedFields> = {
         titleJa: `津幡町 ${r.ID}`,
