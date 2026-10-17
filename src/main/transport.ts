@@ -106,6 +106,9 @@ export function workerRequest(input: {
             interrupted,
           ])
         } catch (error) {
+          // A rejected transport can settle after another process reclaimed
+          // the lease. Fence its retry writes just like a successful response.
+          input.ensure()
           if (input.signal.aborted) throw error
           const classified =
             error instanceof LocalApiError
@@ -115,6 +118,7 @@ export function workerRequest(input: {
             const next = input.now() + 1000 * 2 ** (retries - 1)
             input.retry(next)
             await sleep(next - input.now(), input.signal)
+            input.ensure()
             input.retry(null)
             continue
           }
@@ -172,6 +176,7 @@ export function workerRequest(input: {
           if (delay > 60000) throw error
           input.retry(input.now() + delay)
           await sleep(delay, input.signal)
+          input.ensure()
           input.retry(null)
           continue
         }
