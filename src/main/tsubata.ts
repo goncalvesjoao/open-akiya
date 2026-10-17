@@ -136,13 +136,23 @@ export function tsubataAdapter(options?: {
       allowedUrls: [TSUBATA_EXPORT],
     },
     async discover({ area }, context) {
-      if (!options || !options.intersectsMunicipality(area))
+      if (!options)
         return {
           candidates: [],
           nextCursor: null,
           exhausted: true,
           limitation:
             'Reviewed municipality intersection unavailable; live activation remains blocked',
+        }
+      if (!options.intersectsMunicipality(area))
+        return {
+          candidates: [],
+          nextCursor: null,
+          exhausted: true,
+          limitation: null,
+          caveats: [
+            'Selected area does not intersect the supported municipality; no export requested',
+          ],
         }
       const data = await snapshot(context)
       const rows = data.rows
