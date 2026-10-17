@@ -34,6 +34,10 @@ const adapter = syntheticAdapter(delay, [
 const runtime = new ImportRuntime(process.argv[2], delay, {
   ...(fastTest ? testClock() : {}),
   ...(manualRefreshTest ? { areaFreshnessMs: 0 } : {}),
+  // Exercise bounded discovery through the real desktop worker in synthetic tests.
+  ...(fastTest && process.env.OPEN_AKIYA_TEST_CONTINUATION === '1'
+    ? { detailLimit: 1 }
+    : {}),
   adapters: [
     manualRefreshTest
       ? {
