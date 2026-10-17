@@ -1,3 +1,4 @@
+import { controlledTiles } from './controlled-tiles'
 import { _electron as electron, expect, test } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -9,7 +10,7 @@ test('continues bounded saved discovery without losing map or list results', asy
   const directory = mkdtempSync(join(tmpdir(), 'akiya-continuation-'))
   const app = await electron.launch({
     args: [
-      '--host-resolver-rules=MAP *.tile.openstreetmap.org 127.0.0.1',
+      '--host-resolver-rules=MAP tile.openstreetmap.org 127.0.0.1, MAP *.tile.openstreetmap.org 127.0.0.1',
       'out/main/index.cjs',
     ],
     env: {
@@ -20,7 +21,7 @@ test('continues bounded saved discovery without losing map or list results', asy
     },
   })
   try {
-    await app.context().route('https://**/*', (route) => route.abort())
+    await controlledTiles(app.context())
     const page = await app.firstWindow()
     await page.setViewportSize({ width: 1200, height: 1800 })
     await page.getByRole('button', { name: 'Import sample listings' }).click()

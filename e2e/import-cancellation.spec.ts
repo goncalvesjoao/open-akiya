@@ -1,3 +1,4 @@
+import { controlledTiles } from './controlled-tiles'
 import { _electron as electron, expect, test } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -11,7 +12,7 @@ test('cancels shared intent, queued and running work without losing committed ma
   async function launch() {
     const application = await electron.launch({
       args: [
-        '--host-resolver-rules=MAP *.tile.openstreetmap.org 127.0.0.1',
+        '--host-resolver-rules=MAP tile.openstreetmap.org 127.0.0.1, MAP *.tile.openstreetmap.org 127.0.0.1',
         'out/main/index.cjs',
       ],
       env: {
@@ -21,7 +22,7 @@ test('cancels shared intent, queued and running work without losing committed ma
         OPEN_AKIYA_TEST_IMPORT_QUEUE: '1',
       },
     })
-    await application.context().route('https://**/*', (route) => route.abort())
+    await controlledTiles(application.context())
     return { application, page: await application.firstWindow() }
   }
   let session = await launch()
