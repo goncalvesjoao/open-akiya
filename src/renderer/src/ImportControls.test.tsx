@@ -100,34 +100,6 @@ test('announces worker failure with a recovery action', async () => {
   expect(screen.queryByText('private failure')).not.toBeInTheDocument()
 })
 
-test('refreshes saved results when an import finishes before the active queue is read', async () => {
-  vi.useFakeTimers()
-  try {
-    setup({
-      createImportRequest: vi.fn(async () => cachedImportRequest),
-      inspectImportRequest: vi.fn(async () => cachedImportRequest),
-      inspectImport: vi.fn(async () => succeededImportJob),
-    })
-    const settled = vi.fn()
-    await act(async () => {
-      render(<ImportControls area={initialArea} onSettled={settled} />)
-    })
-    settled.mockClear()
-    await act(async () => {
-      fireEvent.click(
-        screen.getByRole('button', { name: 'Import sample listings' }),
-      )
-    })
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(500)
-    })
-    expect(settled).toHaveBeenCalled()
-  } finally {
-    cleanup()
-    vi.useRealTimers()
-  }
-})
-
 test('acknowledges a persisted attached request before queue polling completes', async () => {
   setup({
     createImportRequest: vi.fn(async () => attachedImportRequest),
@@ -143,8 +115,6 @@ test('acknowledges a persisted attached request before queue polling completes',
 test('keeps the acknowledged request and discovers terminal jobs absent from the active queue', async () => {
   vi.useFakeTimers()
   try {
-    const { succeededImportJob, cachedImportRequest } =
-      await import('../../shared/import-fixtures')
     setup({
       createImportRequest: vi.fn(async () => cachedImportRequest),
       inspectImportRequest: vi.fn(async () => cachedImportRequest),
@@ -163,6 +133,7 @@ test('keeps the acknowledged request and discovers terminal jobs absent from the
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500)
     })
+    expect(screen.getByText(/Request accepted.*cached/)).toBeVisible()
     expect(
       screen.getByRole('list', { name: 'Import queue' }),
     ).toHaveTextContent('Search finished')

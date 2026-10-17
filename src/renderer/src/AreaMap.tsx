@@ -556,14 +556,13 @@ export default function AreaMap() {
                           Boolean(listing),
                         )
                         .map((listing) => (
-                          <li key={listing.id}>
-                            <button
-                              aria-pressed={selectedId === listing.id}
-                              onClick={() => setSelectedId(listing.id)}
-                            >
-                              {listingTitle(listing)}
-                            </button>
-                          </li>
+                          <ListingRow
+                            key={listing.id}
+                            listing={listing}
+                            area={area}
+                            selected={selectedId === listing.id}
+                            onSelect={setSelectedId}
+                          />
                         ))}
                     </ul>
                   </details>

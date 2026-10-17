@@ -39,8 +39,8 @@ test('explores municipality summary markers and list-only groups without house p
     // query refresh before checking draft edits: that refresh legitimately
     // replaces marker data and is independent of editing coordinate drafts.
     await expect(
-      page.getByRole('list', { name: 'Import queue' }).getByRole('listitem'),
-    ).toHaveCount(0, { timeout: 30000 })
+      page.getByRole('list', { name: 'Import queue' }),
+    ).toContainText('Search finished', { timeout: 30000 })
     await expect(page.getByText('Loading listings…')).toHaveCount(0)
     // Draft edits must preserve real Leaflet markers for subsequent keyboard activation.
     const marker = await pin.elementHandle()

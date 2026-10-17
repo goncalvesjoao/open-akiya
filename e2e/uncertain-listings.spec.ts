@@ -32,7 +32,10 @@ test('explores uncertain source-point candidates with synchronized pins, results
     await page
       .getByRole('button', { name: 'Sample sale listing', exact: true })
       .click()
-    await pin.click()
+    // These authored source points coincide. Keyboard activation targets the
+    // intended real Leaflet marker without depending on coincident DOM stacking.
+    await pin.focus()
+    await pin.press('Enter')
     await expect(
       results.getByRole('button', {
         name: 'Approximate sample listing',

@@ -24,6 +24,10 @@ test('keeps municipality offers in expandable groups without duplicate rows or f
   const listings = municipalityFixtures
     .slice(0, 3)
     .filter((listing) => listing.availability !== 'unavailable')
+    .map((listing, index) => ({
+      ...listing,
+      sourceCheckedAt: index === 0 ? '2026-10-14T03:00:00Z' : null,
+    }))
   const result: AreaResults = {
     area: initialArea,
     showUnavailable: false,
@@ -64,6 +68,12 @@ test('keeps municipality offers in expandable groups without duplicate rows or f
   const group = await screen.findByRole('group', {
     name: 'Municipality summary: Sample municipality without a point',
   })
+  expect(group).toHaveTextContent('Last successful check: Unknown')
+  expect(
+    screen.getByRole('group', {
+      name: 'Municipality summary: Sample municipality',
+    }),
+  ).toHaveTextContent('Last successful check: 2026-10-14T03:00:00Z')
   expect(
     within(group).getByText(/No documented representative point/),
   ).toBeVisible()
