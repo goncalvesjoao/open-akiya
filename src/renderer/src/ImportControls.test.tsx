@@ -211,3 +211,86 @@ test('refreshes saved results for a failed tracked job after it leaves the queue
     vi.useRealTimers()
   }
 })
+
+test.each(['pending follow-up', 'running shared job'])(
+  'stops settled inspections while retaining history and following %s',
+  async (reason) => {
+    vi.useFakeTimers()
+    try {
+      let finished = false
+      const api = setup({
+        createImportRequest: vi.fn(async () => cachedImportRequest),
+        inspectImportRequest: vi.fn(async () => ({
+          ...cachedImportRequest,
+          pendingFollowUp: reason === 'pending follow-up' && !finished,
+        })),
+        inspectImport: vi.fn(async () =>
+          reason === 'running shared job' && !finished
+            ? job
+            : succeededImportJob,
+        ),
+      })
+      const settled = vi.fn()
+      await act(async () => {
+        render(<ImportControls area={initialArea} onSettled={settled} />)
+      })
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Import sample listings' }),
+        )
+      })
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1000)
+      })
+      expect(api.inspectImportRequest).toHaveBeenCalledTimes(2)
+      finished = true
+      settled.mockClear()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500)
+      })
+      expect(api.inspectImportRequest).toHaveBeenCalledTimes(3)
+      expect(screen.getByText(/Request accepted.*cached/)).toBeVisible()
+      expect(
+        screen.getByRole('list', { name: 'Import queue' }),
+      ).toHaveTextContent('Search finished')
+      if (reason === 'running shared job') expect(settled).toHaveBeenCalled()
+      const jobReads = vi.mocked(api.inspectImport).mock.calls.length
+      const queueReads = vi.mocked(api.listImports).mock.calls.length
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000)
+      })
+      expect(api.inspectImportRequest).toHaveBeenCalledTimes(3)
+      expect(api.inspectImport).toHaveBeenCalledTimes(jobReads)
+      expect(vi.mocked(api.listImports).mock.calls.length).toBeGreaterThan(
+        queueReads,
+      )
+      api.createImportRequest = vi.fn(async () => ({
+        ...queuedImportRequest,
+        id: 'new-request',
+      }))
+      api.inspectImportRequest = vi.fn(async () => ({
+        ...queuedImportRequest,
+        id: 'new-request',
+      }))
+      api.listImports = vi.fn(async () => ({
+        jobs: [{ ...job, id: 'new-job' }],
+      }))
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole('button', { name: 'Import sample listings' }),
+        )
+        await vi.advanceTimersByTimeAsync(500)
+      })
+      expect(api.inspectImportRequest).toHaveBeenCalledWith('new-request')
+      expect(
+        screen.getByRole('list', { name: 'Import queue' }),
+      ).toHaveTextContent('running')
+      expect(
+        screen.getByRole('list', { name: 'Import queue' }),
+      ).toHaveTextContent('Search finished')
+    } finally {
+      cleanup()
+      vi.useRealTimers()
+    }
+  },
+)

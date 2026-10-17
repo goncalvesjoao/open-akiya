@@ -47,6 +47,15 @@ export default function ImportControls({
             observedJobs.current.set(job.id, job)
           }
           if (
+            isTerminal(nextRequest.state) &&
+            !nextRequest.pendingFollowUp &&
+            nextRequest.jobIds.every((jobId) => {
+              const job = observedJobs.current.get(jobId)
+              return job !== undefined && isTerminal(job.state)
+            })
+          )
+            requests.current.delete(id)
+          if (
             snapshot.state !== nextRequest.state &&
             isTerminal(nextRequest.state)
           )
