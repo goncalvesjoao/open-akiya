@@ -1,3 +1,4 @@
+import { readRecovery, saveRecovery } from './recovery-storage'
 import LocationSearch from './LocationSearch'
 import ImportControls from './ImportControls'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -286,9 +287,16 @@ function MapCanvas({
 }
 
 export default function AreaMap() {
-  const [area, setArea] = useState(initialArea)
+  const [area, setArea] = useState(() => {
+    const saved = readRecovery('selected-area')
+    return isSelectedArea(saved) ? saved : initialArea
+  })
   const [selectionRevision, setSelectionRevision] = useState(0)
-  const [draft, setDraft] = useState(['35', '135', '5'])
+  const [draft, setDraft] = useState(() => [
+    String(area.center.latitude),
+    String(area.center.longitude),
+    String(area.radiusKm),
+  ])
   const [showUnavailable, setShowUnavailable] = useState(false)
   const [results, setResults] = useState<AreaResults | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -302,6 +310,7 @@ export default function AreaMap() {
     setSelectionRevision((value) => value + 1)
     setLoading(true)
     setQueryError('')
+    saveRecovery('selected-area', next)
     setArea(next)
     setDraft([
       String(next.center.latitude),
