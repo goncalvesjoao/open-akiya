@@ -455,3 +455,90 @@ test('reconnects accepted request intents after reload without resubmitting work
   ).toBeVisible()
   expect(api.createImportRequest).toHaveBeenCalledTimes(1)
 })
+
+test('cancels a pending follow-up intent using its returned state while shared work stays running', async () => {
+  const { manualRefreshFixtures } =
+    await import('../../shared/manual-refresh-fixtures')
+  const api = setup({
+    createImportRequest: vi.fn(async () => manualRefreshFixtures.attached),
+    cancelImportRequest: vi.fn(async () => manualRefreshFixtures.cancelled),
+    listImports: vi.fn(async () => ({ jobs: [job] })),
+  })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Import sample listings' }),
+  )
+  await screen.findByRole('button', { name: 'Cancel request intent' })
+  expect(
+    screen.getByRole('list', { name: 'Your import requests' }),
+  ).toHaveTextContent('Follow-up pending')
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel request intent' }))
+  await waitFor(() =>
+    expect(
+      screen.getByRole('list', { name: 'Your import requests' }),
+    ).toHaveTextContent('cancelled'),
+  )
+  expect(
+    screen.getByRole('list', { name: 'Your import requests' }),
+  ).not.toHaveTextContent('Follow-up pending')
+  expect(screen.getByRole('list', { name: 'Import queue' })).toHaveTextContent(
+    'running',
+  )
+  expect(api.cancelImport).not.toHaveBeenCalled()
+})
+
+test('keeps cancelled queue entries and remaining accepted work visible after the returned snapshot', async () => {
+  const { overlappingQueuedImportJob } =
+    await import('../../shared/import-fixtures')
+  const { cancelledQueuedImportJob } =
+    await import('../../shared/cancellation-fixtures')
+  setup({
+    listImports: vi.fn(async () => ({
+      jobs: [job, overlappingQueuedImportJob],
+    })),
+    cancelImport: vi.fn(async () => cancelledQueuedImportJob),
+  })
+  const settled = vi.fn()
+  render(<ImportControls area={initialArea} onSettled={settled} />)
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Cancel queued job' }),
+  )
+  expect(await screen.findByText('Cancelled')).toBeVisible()
+  expect(
+    screen.getByRole('button', { name: 'Cancel running job' }),
+  ).toBeVisible()
+  expect(screen.queryByRole('button', { name: 'Cancel queued job' })).toBeNull()
+  expect(settled).toHaveBeenCalled()
+})
+
+test.each(['job', 'request'])(
+  'reports %s cancellation failure without claiming cancellation',
+  async (kind) => {
+    const reject = async () => {
+      throw new Error('private')
+    }
+    setup({
+      listImports: vi.fn(async () => ({ jobs: [job] })),
+      cancelImport: vi.fn(reject),
+      cancelImportRequest: vi.fn(reject),
+    })
+    render(<ImportControls area={initialArea} onSettled={() => {}} />)
+    if (kind === 'request') {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Import sample listings' }),
+      )
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Cancel request intent' }),
+      )
+    } else {
+      fireEvent.click(
+        await screen.findByRole('button', { name: 'Cancel running job' }),
+      )
+    }
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Inspect its current state before retrying',
+    )
+    expect(screen.queryByText('Cancelled')).toBeNull()
+    expect(screen.queryByText('private')).toBeNull()
+  },
+)
