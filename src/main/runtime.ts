@@ -107,6 +107,8 @@ type RuntimeOptions = TransportOptions & {
   leaseMs?: number
   discoveryLimit?: number
   detailLimit?: number
+  rowLimit?: number
+  byteLimit?: number
   refreshReservation?: number
   areaFreshnessMs?: number
   detailFreshnessMs?: number
@@ -127,6 +129,8 @@ export class ImportRuntime {
   private readonly now: () => number
   private readonly leaseMs: number
   private readonly limits: { discoveryLimit: number; detailLimit: number }
+  private readonly byteLimit: number
+  private readonly rowLimit: number
   private readonly refreshReservation: number
   private readonly transportOptions: TransportOptions
   private readonly transportQueue = { tail: Promise.resolve() }
@@ -138,6 +142,12 @@ export class ImportRuntime {
   private heartbeat: ReturnType<typeof setInterval> | undefined
   private controller: AbortController | undefined
   constructor(path: string, delayMs = 300, options: RuntimeOptions = {}) {
+    this.byteLimit = options.byteLimit ?? 5000000
+    if (!Number.isSafeInteger(this.byteLimit) || this.byteLimit < 1)
+      invalid('Invalid byte budget')
+    this.rowLimit = options.rowLimit ?? 1000
+    if (!Number.isSafeInteger(this.rowLimit) || this.rowLimit < 1)
+      invalid('Invalid row budget')
     this.municipalityReference =
       options.municipalityReference ?? municipalityReference
     this.limits = {
@@ -183,6 +193,7 @@ export class ImportRuntime {
       CREATE TABLE IF NOT EXISTS executor_v2 (singleton INTEGER PRIMARY KEY CHECK(singleton=1), owner TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, source_id TEXT NOT NULL, external_id TEXT NOT NULL, data TEXT NOT NULL, UNIQUE(source_id,external_id));
       CREATE TABLE IF NOT EXISTS listing_discovery_areas (listing_id TEXT NOT NULL REFERENCES listings(id), area TEXT NOT NULL, PRIMARY KEY(listing_id,area));
+      CREATE TABLE IF NOT EXISTS source_snapshots (job_id TEXT NOT NULL, source_id TEXT NOT NULL, scope_key TEXT NOT NULL, key TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(job_id,source_id,key));
       CREATE TABLE IF NOT EXISTS source_host_limits (host TEXT PRIMARY KEY, next_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS discovery_checkpoints (source_id TEXT NOT NULL, query_key TEXT NOT NULL, adapter_version TEXT NOT NULL, date_field TEXT NOT NULL, boundary_at TEXT NOT NULL, overlap_seconds INTEGER NOT NULL, completed_at TEXT NOT NULL, PRIMARY KEY(source_id,query_key,adapter_version,date_field));
       CREATE TABLE IF NOT EXISTS source_traversals (job_id TEXT NOT NULL, source_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(job_id,source_id));
@@ -350,6 +361,9 @@ export class ImportRuntime {
       if (
         !active(job) &&
         job.state !== 'cancelled' &&
+        !job.sources.some(
+          (source) => source.error?.code === 'SOURCE_BLOCKED',
+        ) &&
         manual &&
         !manual.follow_up_queued
       ) {
@@ -1232,9 +1246,100 @@ export class ImportRuntime {
   ): AdapterContext {
     return {
       signal: this.controller!.signal,
+      consumeRow: () =>
+        this.transportMutation(job, () => {
+          this.ensure(job)
+          job.budget.rowLimit ??= this.rowLimit
+          job.budget.rowUsed ??= 0
+          if (job.budget.rowUsed >= job.budget.rowLimit)
+            throw new LocalApiError(
+              409,
+              'BUDGET_EXHAUSTED',
+              'Import row budget exhausted',
+            )
+          job.budget.rowUsed++
+          this.saveProgress(job, progress)
+        }),
+      snapshot: async <T>(
+        key: string,
+        acquire: () => Promise<T>,
+        maxAgeMs = Infinity,
+      ): Promise<T> => {
+        this.ensure(job)
+        let ancestor: ImportJob | undefined = job
+        while (ancestor) {
+          const row = this.db
+            .prepare(
+              'SELECT data FROM source_snapshots WHERE job_id=? AND source_id=? AND scope_key=? AND key=?',
+            )
+            .get(ancestor.id, adapter.capabilities.sourceId, job.scopeKey, key)
+          if (row) {
+            const saved = JSON.parse(String(row.data)) as {
+              acquiredAt: number
+              value: T
+            }
+            if (
+              !Number.isFinite(saved.acquiredAt) ||
+              this.now() - saved.acquiredAt >= maxAgeMs ||
+              (progress.refreshCutoff &&
+                saved.acquiredAt < Date.parse(progress.refreshCutoff))
+            )
+              break
+            const value = saved.value
+            this.transportMutation(job, () => {
+              this.db
+                .prepare(
+                  'INSERT OR REPLACE INTO source_snapshots VALUES (?,?,?,?,?)',
+                )
+                .run(
+                  job.id,
+                  adapter.capabilities.sourceId,
+                  job.scopeKey,
+                  key,
+                  JSON.stringify(saved),
+                )
+            })
+            return value
+          }
+          // Explicit continuation alone reuses immutable snapshot bytes; a
+          // refresh follow-up must obtain evidence at its own intent cutoff.
+          ancestor = ancestor.continuation.fromJobId
+            ? this.inspect(ancestor.continuation.fromJobId)
+            : undefined
+        }
+        if (job.continuation.fromJobId) {
+          job.continuation.restarted = true
+          job.continuation.restartReason ??= 'SNAPSHOT_INVALID'
+          job.reasons = [...new Set([...job.reasons, 'SNAPSHOT_INVALID'])]
+          job.coverage.caveats = [
+            ...new Set([
+              ...job.coverage.caveats,
+              'Saved snapshot unavailable or stale; a bounded full export acquisition is required',
+            ]),
+          ]
+          this.transportMutation(job, () => this.saveProgress(job, progress))
+        }
+        const value = await acquire()
+        this.ensure(job)
+        this.transportMutation(job, () => {
+          this.db
+            .prepare(
+              'INSERT OR REPLACE INTO source_snapshots VALUES (?,?,?,?,?)',
+            )
+            .run(
+              job.id,
+              adapter.capabilities.sourceId,
+              job.scopeKey,
+              key,
+              JSON.stringify({ acquiredAt: this.now(), value }),
+            )
+        })
+        return value
+      },
       now: () => this.time(),
       request: workerRequest({
         hosts: adapter.capabilities.allowedHosts,
+        urls: adapter.capabilities.allowedUrls,
         signal: this.controller!.signal,
         now: this.now,
         ensure: () => this.ensure(job),
@@ -1277,8 +1382,29 @@ export class ImportRuntime {
               )
               .run(job.id, adapter.capabilities.sourceId, time)
           }),
+        accountBytes: (bytes) => {
+          this.transportMutation(job, () => {
+            job.budget.byteLimit ??= this.byteLimit
+            job.budget.byteUsed = (job.budget.byteUsed ?? 0) + bytes
+            this.saveProgress(job, progress)
+          })
+          if (job.budget.byteUsed! > job.budget.byteLimit!)
+            throw new LocalApiError(
+              409,
+              'BYTE_BUDGET_EXHAUSTED',
+              'Import byte budget exhausted',
+            )
+        },
         account: (kind) =>
           this.transportMutation(job, () => {
+            if (
+              (job.budget.byteUsed ?? 0) >= (job.budget.byteLimit ?? Infinity)
+            )
+              throw new LocalApiError(
+                409,
+                'BYTE_BUDGET_EXHAUSTED',
+                'Import byte budget exhausted',
+              )
             const used = kind === 'discovery' ? 'discoveryUsed' : 'detailUsed'
             const limit =
               kind === 'discovery' ? 'discoveryLimit' : 'detailLimit'
@@ -1885,6 +2011,14 @@ export class ImportRuntime {
           adapter.capabilities.sourceId ===
           job.sources[task.sourceIndex].sourceId,
       )!
+      if (job.sources[task.sourceIndex].error?.code === 'SOURCE_BLOCKED') {
+        // An access block stops every remaining operation for this source in
+        // this job. Keep its unfinished refresh checks for explicit continuation.
+        ;(progress.deferredRefresh ??= []).push(task)
+        progress.refreshIndex!++
+        this.saveProgress(job, progress)
+        continue
+      }
       if (
         job.budget.detailUsed >= limit &&
         !this.freshObservation(adapter, task.candidate, progress.refreshCutoff)
@@ -2227,13 +2361,15 @@ export class ImportRuntime {
           }
         }
         try {
+          if (source.error?.code === 'SOURCE_BLOCKED')
+            throw new LocalApiError(409, 'SOURCE_BLOCKED', source.error.message)
           if (adapter.capabilities.geography === 'unsupported')
             throw new LocalApiError(
               409,
               'CONFIGURATION_ERROR',
               'Source does not support this search geography',
             )
-          while (true) {
+          discovery: while (true) {
             this.ensure(job)
             if (!progress.candidates.length && !progress.exhausted) {
               job.stage = 'discovering'
@@ -2294,6 +2430,9 @@ export class ImportRuntime {
               if (
                 !page ||
                 !Array.isArray(page.candidates) ||
+                (page.caveats !== undefined &&
+                  (!Array.isArray(page.caveats) ||
+                    page.caveats.some((value) => typeof value !== 'string'))) ||
                 typeof page.exhausted !== 'boolean' ||
                 (page.nextCursor !== null &&
                   typeof page.nextCursor !== 'string') ||
@@ -2343,6 +2482,9 @@ export class ImportRuntime {
                   page.exhausted = true
                 }
               }
+              job.coverage.caveats = [
+                ...new Set([...job.coverage.caveats, ...(page.caveats ?? [])]),
+              ]
               progress.visitedCursors.push(cursorKey)
               progress.candidates = page.candidates
               progress.candidateIndex = 0
@@ -2420,16 +2562,52 @@ export class ImportRuntime {
                 this.saveProgress(job, progress)
                 continue
               }
-              await this.detail(
-                job,
-                progress,
-                progress.sourceIndex,
-                candidate,
-                known ? 'refresh' : 'new',
-                () => {
-                  progress.candidateIndex++
-                },
-              )
+              try {
+                await this.detail(
+                  job,
+                  progress,
+                  progress.sourceIndex,
+                  candidate,
+                  known ? 'refresh' : 'new',
+                  () => {
+                    progress.candidateIndex++
+                  },
+                )
+              } catch (error) {
+                if (
+                  !(error instanceof LocalApiError) ||
+                  error.code !== 'SNAPSHOT_INVALID'
+                )
+                  throw error
+                progress.cursor = null
+                progress.candidates = []
+                progress.candidateIndex = 0
+                progress.exhausted = false
+                progress.discoveryComplete = false
+                progress.visitedCursors = []
+                progress.completed = progress.completed.filter(
+                  (value) =>
+                    !value.startsWith(
+                      JSON.stringify([adapter.capabilities.sourceId]).slice(
+                        0,
+                        -1,
+                      ) + ',',
+                    ),
+                )
+                job.continuation.restarted = true
+                job.continuation.restartReason = 'SNAPSHOT_INVALID'
+                job.reasons = [...new Set([...job.reasons, 'SNAPSHOT_INVALID'])]
+                job.coverage.caveats = [
+                  ...new Set([
+                    ...job.coverage.caveats,
+                    'Saved processing snapshot invalidated; discovery restarted within this job budget',
+                  ]),
+                ]
+                this.transportMutation(job, () =>
+                  this.saveProgress(job, progress),
+                )
+                continue discovery
+              }
             }
             progress.candidates = []
             progress.candidateIndex = 0

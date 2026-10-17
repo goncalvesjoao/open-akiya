@@ -27,10 +27,12 @@ export type AdapterCapabilities = {
     evidence: string
   }
   cursorVersion: string
+  allowedUrls?: string[]
   allowedHosts: string[]
 }
 export type Candidate = {
   externalId: string
+  snapshotFingerprint?: string
   transactionType: ListingProjection['transactionType']
   url: string
   location: Location
@@ -40,6 +42,7 @@ export type Candidate = {
   relevance: 'known_inside' | 'plausible' | 'known_outside'
 }
 export type DiscoveryPage = {
+  caveats?: string[]
   candidates: Candidate[]
   nextCursor: string | null
   exhausted: boolean
@@ -82,11 +85,20 @@ export type NormalizationResult =
   | { kind: 'rejected'; error: ApiError }
 export type AdapterContext = {
   signal: AbortSignal
+  consumeRow(): void
+  snapshot<T>(
+    key: string,
+    acquire: () => Promise<T>,
+    maxAgeMs?: number,
+  ): Promise<T>
   now(): string
   request(
     kind: 'discovery' | 'detail',
     url: string,
-    options?: RequestInit,
+    options?: RequestInit & {
+      responseMetadata?: boolean
+      maximumBytes?: number
+    },
   ): Promise<unknown>
 }
 export interface SourceAdapter {
