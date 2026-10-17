@@ -22,6 +22,11 @@ Use machine-account mode with GitHub account `itsjohngon`, commit
 identity `ItsJohnGon <itsjohngon@gmail.com>`, and human reviewer
 `goncalvesjoao` for `github.com/goncalvesjoao/open-akiya`.
 
+copilot_review: true
+
+Request Copilot review during the PR workflow. This choice does not
+configure GitHub automatic review.
+
 Before every Ship-it run, including delegated or nested work, resumed
 runs, and scheduled ticks, reload this policy. Resolve the helper with
 `git rev-parse --path-format=absolute --git-common-dir`, then prefix
@@ -54,8 +59,12 @@ setup-ship-it references/github-identity.md path to delegated workers.
 Require nested workers to forward them. Include these instructions in
 saved monitoring prompts.
 
-For machine-authored PRs, request review from `goncalvesjoao` at review
-handoff and verify the request or an existing human review. If the PR
-is unassigned, assign `goncalvesjoao`; preserve existing assignments.
-An unavailable or ineligible reviewer leaves handoff incomplete.
-Preserve all upstream approval gates.
+For machine-authored PRs, request review from `goncalvesjoao` only at
+`status/ready-for-merge` or `status/blocked`, and verify the request or
+an existing human review. `status/ready-for-review` does not trigger
+human review. If required human approval is the remaining gate after
+independent work finishes, hand off as blocked.
+
+If the PR is unassigned, assign `goncalvesjoao`; preserve existing
+assignments. An unavailable or ineligible reviewer leaves handoff
+incomplete. Preserve all upstream approval gates.
