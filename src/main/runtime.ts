@@ -1205,6 +1205,14 @@ export class ImportRuntime {
       .prepare('UPDATE import_jobs_v2 SET progress=? WHERE id=?')
       .run(JSON.stringify(progress), job.id)
   }
+  private transportMutation(job: ImportJob, mutation: () => void) {
+    // Hold SQLite's write lock while checking ownership and persisting effects.
+    // A separate ensure before this transaction leaves a takeover race.
+    this.transaction(() => {
+      this.ensure(job)
+      mutation()
+    })
+  }
   private context(
     job: ImportJob,
     adapter: SourceAdapter,
@@ -1236,48 +1244,52 @@ export class ImportRuntime {
                 .get(job.id, adapter.capabilities.sourceId)?.retry_at ?? 0,
             ),
           ),
-        saveNext: (host, time) => {
-          this.db
-            .prepare(
-              'INSERT INTO source_host_limits VALUES (?,?) ON CONFLICT(host) DO UPDATE SET next_at=excluded.next_at',
+        saveNext: (host, time) =>
+          this.transportMutation(job, () => {
+            this.db
+              .prepare(
+                'INSERT INTO source_host_limits VALUES (?,?) ON CONFLICT(host) DO UPDATE SET next_at=excluded.next_at',
+              )
+              .run(host, time)
+          }),
+        retry: (time) =>
+          this.transportMutation(job, () => {
+            this.db
+              .prepare(
+                'INSERT INTO source_task_state VALUES (?,?,?) ON CONFLICT(job_id,source_id) DO UPDATE SET retry_at=excluded.retry_at',
+              )
+              .run(job.id, adapter.capabilities.sourceId, time)
+          }),
+        account: (kind) =>
+          this.transportMutation(job, () => {
+            const used = kind === 'discovery' ? 'discoveryUsed' : 'detailUsed'
+            const limit =
+              kind === 'discovery' ? 'discoveryLimit' : 'detailLimit'
+            if (job.budget[used] >= job.budget[limit])
+              throw new LocalApiError(
+                409,
+                'BUDGET_EXHAUSTED',
+                'Import request budget exhausted',
+              )
+            if (
+              kind === 'detail' &&
+              detailClass === 'refresh' &&
+              progress.refreshAttemptLimit !== undefined &&
+              job.budget.detailUsed >= progress.refreshAttemptLimit
             )
-            .run(host, time)
-        },
-        retry: (time) => {
-          this.db
-            .prepare(
-              'INSERT INTO source_task_state VALUES (?,?,?) ON CONFLICT(job_id,source_id) DO UPDATE SET retry_at=excluded.retry_at',
-            )
-            .run(job.id, adapter.capabilities.sourceId, time)
-        },
-        account: (kind) => {
-          const used = kind === 'discovery' ? 'discoveryUsed' : 'detailUsed'
-          const limit = kind === 'discovery' ? 'discoveryLimit' : 'detailLimit'
-          if (job.budget[used] >= job.budget[limit])
-            throw new LocalApiError(
-              409,
-              'BUDGET_EXHAUSTED',
-              'Import request budget exhausted',
-            )
-          if (
-            kind === 'detail' &&
-            detailClass === 'refresh' &&
-            progress.refreshAttemptLimit !== undefined &&
-            job.budget.detailUsed >= progress.refreshAttemptLimit
-          )
-            throw new LocalApiError(
-              409,
-              'BUDGET_EXHAUSTED',
-              'Reserved refresh request capacity exhausted',
-            )
-          job.budget[used]++
-          if (kind === 'detail') {
-            progress.detailClassUsed![detailClass]++
-            progress.nextDetailClass =
-              detailClass === 'refresh' ? 'new' : 'refresh'
-          }
-          this.saveProgress(job, progress)
-        },
+              throw new LocalApiError(
+                409,
+                'BUDGET_EXHAUSTED',
+                'Reserved refresh request capacity exhausted',
+              )
+            job.budget[used]++
+            if (kind === 'detail') {
+              progress.detailClassUsed![detailClass]++
+              progress.nextDetailClass =
+                detailClass === 'refresh' ? 'new' : 'refresh'
+            }
+            this.saveProgress(job, progress)
+          }),
       }),
     }
   }
