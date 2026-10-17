@@ -39,6 +39,10 @@ export type ImportJob = {
     discoveryLimit: number
     detailUsed: number
     detailLimit: number
+    byteUsed?: number
+    byteLimit?: number
+    rowUsed?: number
+    rowLimit?: number
   }
   sources: {
     sourceId: string

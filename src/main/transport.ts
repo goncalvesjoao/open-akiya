@@ -37,10 +37,12 @@ const failure = (code: string, message: string, retryable = false) =>
 // physical attempt (including redirect hops) passes accounting and host pacing.
 export function workerRequest(input: {
   hosts: string[]
+  urls?: string[]
   signal: AbortSignal
   now(): number
   ensure(): void
   account(kind: 'discovery' | 'detail'): void
+  accountBytes?(bytes: number): void
   next(host: string): number
   saveNext(host: string, time: number): void
   retry(time: number | null): void
@@ -67,7 +69,8 @@ export function workerRequest(input: {
           parsed.protocol !== 'https:' ||
           parsed.username ||
           parsed.password ||
-          !input.hosts.includes(parsed.hostname)
+          !input.hosts.includes(parsed.hostname) ||
+          (input.urls !== undefined && !input.urls.includes(parsed.href))
         )
           throw failure('INVALID_SOURCE_URL', 'Source URL rejected')
         const pause = input.next(parsed.hostname) - input.now()
@@ -99,13 +102,44 @@ export function workerRequest(input: {
           )
           response = await Promise.race([
             transport(url, {
-              ...options,
+              ...Object.fromEntries(Object.entries(options).filter(([key]) => key !== 'responseMetadata')),
               redirect: 'manual',
               signal: controller.signal,
+            }).then(async response => {
+              input.ensure()
+              if (!options.responseMetadata || [401, 403].includes(response.status)) return response
+              const headers = Object.fromEntries(Object.entries(response.headers ?? {}).map(([key,value]) => [key.toLowerCase(),value]))
+          const chunks: Uint8Array[] = []
+          let bytes = 0
+          const add = (chunk: Uint8Array) => {
+            input.accountBytes?.(chunk.byteLength)
+            bytes += chunk.byteLength
+            chunks.push(chunk)
+          }
+          if (typeof response.body === 'string') add(new TextEncoder().encode(response.body))
+          else if (response.body instanceof Uint8Array) add(response.body)
+          else if (response.body && typeof response.body === 'object' && Symbol.asyncIterator in response.body) {
+            for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
+              input.ensure(); controller.signal.throwIfAborted()
+              add(chunk)
+            }
+          } else if (response.status >= 300 && response.body == null) add(new Uint8Array())
+          else throw failure('PARSE_ERROR', 'Expected a UTF-8 export response')
+          input.ensure(); controller.signal.throwIfAborted()
+          if (response.status === 206 || headers['content-range']) throw failure('TRUNCATED_RESPONSE', 'Partial export response cannot establish a snapshot')
+          const length = headers['content-length']
+          if (length && (!/^\d+$/.test(length) || Number(length) !== bytes))
+            throw failure('TRUNCATED_RESPONSE', 'Export response length does not match its acquired bytes')
+          let body: string
+          try { body = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.concat(chunks)) }
+          catch { throw failure('PARSE_ERROR', 'Export encoding is invalid') }
+
+              return {...response, body}
             }),
             interrupted,
           ])
         } catch (error) {
+          controller.abort()
           // A rejected transport can settle after another process reclaimed
           // the lease. Fence its retry writes just like a successful response.
           input.ensure()
@@ -184,6 +218,7 @@ export function workerRequest(input: {
           throw failure('SOURCE_BLOCKED', 'Source access is blocked')
         if (response.status < 200 || response.status >= 300)
           throw failure('CONFIGURATION_ERROR', 'Source response is unsupported')
+        if (options.responseMetadata) return {body: response.body, headers}
         return response.body ?? null
       }
     }
