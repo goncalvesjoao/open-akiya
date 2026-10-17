@@ -15,3 +15,47 @@ When a skill says to publish to the issue tracker, create a GitHub issue. When i
 **PRs as a request surface: no.** External PRs are not automatically included in triage discovery. Explicitly named PRs may still be reviewed.
 
 GitHub shares a number space across issues and PRs. Resolve an ambiguous number with `gh pr view` and fall back to `gh issue view`.
+
+## Ship-it identity
+
+Use machine-account mode with GitHub account `itsjohngon`, commit
+identity `ItsJohnGon <itsjohngon@gmail.com>`, and human reviewer
+`goncalvesjoao` for `github.com/goncalvesjoao/open-akiya`.
+
+Before every Ship-it run, including delegated or nested work, resumed
+runs, and scheduled ticks, reload this policy. Resolve the helper with
+`git rev-parse --path-format=absolute --git-common-dir`, then prefix
+every Ship-it gh/git command with:
+`<absolute-git-common-dir>/ship-it/run --account itsjohngon`.
+Use explicit GitHub repository/host arguments.
+
+Provision `ship-it/run` and sibling `ship-it/config.json` privately
+inside Git's common directory on each machine or independent clone.
+Linked worktrees share this setup. Keep credentials and absolute
+machine paths untracked. Machine mode uses `gh-login` authentication
+with an isolated `ship-it/gh` directory inside Git's common directory.
+Browser login uses `--insecure-storage`, saving the credential in plaintext
+in its private `hosts.yml`. Keep the directory at mode 700 and `hosts.yml`
+at mode 600. The helper reads that credential and uses an isolated
+temporary GH_CONFIG_DIR for commands.
+
+The helper verifies the login on every invocation and applies the
+configured author and committer identity. Standard GitHub HTTPS and
+SSH remotes are supported. Nonstandard remotes require separate review.
+
+Missing setup, credentials, policy disagreement, or identity
+verification failure stops GitHub access and Git writes/network
+operations without fallback to another account, ambient credentials,
+connectors, or SSH agents. Local inspection and drafting may continue.
+Pause affected monitoring and report the blocker.
+
+Pass this policy, expected login, target checkout, and the installed
+setup-ship-it references/github-identity.md path to delegated workers.
+Require nested workers to forward them. Include these instructions in
+saved monitoring prompts.
+
+For machine-authored PRs, request review from `goncalvesjoao` at review
+handoff and verify the request or an existing human review. If the PR
+is unassigned, assign `goncalvesjoao`; preserve existing assignments.
+An unavailable or ineligible reviewer leaves handoff incomplete.
+Preserve all upstream approval gates.

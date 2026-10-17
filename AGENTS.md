@@ -15,3 +15,9 @@ Use the canonical triage labels. Read `docs/agents/triage-labels.md` before appl
 ### Domain docs
 
 Use a single-context glossary and ADR layout. Read `docs/agents/domain.md` before domain exploration.
+
+### Ship-it identity
+
+Before any Ship-it command, delegated or nested work, resumed run, or
+scheduled tick, read and follow `docs/agents/issue-tracker.md`, including
+its Ship-it identity policy.
