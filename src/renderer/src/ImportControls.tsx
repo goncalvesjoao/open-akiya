@@ -1,42 +1,21 @@
 import { useEffect, useRef, useState } from 'react'
 import type { SelectedArea } from '../../shared/listings'
 import type { ImportRequest, Job } from '../../shared/desktop'
+import { readRecovery, recoveryIds, saveRecovery } from './recovery-storage'
 
-const requestStorageKey = 'open-akiya.import-request-ids'
-function retainedRequestIds(): string[] {
-  try {
-    const value: unknown = JSON.parse(
-      localStorage.getItem(requestStorageKey) ?? '[]',
-    )
-    return Array.isArray(value)
-      ? value.filter((id): id is string => typeof id === 'string')
-      : []
-  } catch {
-    return []
-  }
-}
-function retainRequestId(id: string) {
-  try {
-    localStorage.setItem(
-      requestStorageKey,
-      JSON.stringify([...new Set([...retainedRequestIds(), id])]),
-    )
-  } catch {
-    /* Queue remains available when browser storage is unavailable. */
-  }
-}
-
-function forgetRequestId(id: string) {
-  try {
-    localStorage.setItem(
-      requestStorageKey,
-      JSON.stringify(
-        retainedRequestIds().filter((retained) => retained !== id),
-      ),
-    )
-  } catch {
-    /* Queue remains available when browser storage is unavailable. */
-  }
+function initialRequests() {
+  const latest = readRecovery('import-last-request-id')
+  return [
+    ...new Set([
+      ...recoveryIds('import-request-ids'),
+      ...(typeof latest === 'string' &&
+      latest.length <= 200 &&
+      latest.length > 0
+        ? [latest]
+        : []),
+      ...recoveryIds('open-akiya.import-request-ids'),
+    ]),
+  ]
 }
 
 function isTerminal(state: Job['state']) {
@@ -52,7 +31,14 @@ export default function ImportControls({
 }) {
   const [request, setRequest] = useState<ImportRequest | null>(null)
   const [requestHistory, setRequestHistory] = useState<ImportRequest[]>([])
-  const requests = useRef(new Map<string, ImportRequest>())
+  const [initialRequestIds] = useState(initialRequests)
+  const retainedRequests = useRef(new Set(initialRequestIds))
+  const retainedJobs = useRef(new Set(recoveryIds('import-job-ids')))
+  const requests = useRef(
+    new Map<string, ImportRequest | null>(
+      initialRequestIds.map((id) => [id, null]),
+    ),
+  )
   const observedJobs = useRef(new Map<string, Job>())
   const [jobs, setJobs] = useState<Job[]>([])
   const [error, setError] = useState('')
@@ -60,7 +46,8 @@ export default function ImportControls({
   const pendingAction = useRef<{ scope: string; key: string } | null>(null)
   const [creating, setCreating] = useState(false)
   const settled = useRef(onSettled)
-  const requestRef = useRef<string | null>(null)
+  const requestRef = useRef<string | null>(initialRequestIds.at(-1) ?? null)
+  const retryRecovery = useRef<() => void>(() => {})
   const previous = useRef('')
   const revision = useRef(0)
   useEffect(() => {
@@ -68,58 +55,82 @@ export default function ImportControls({
   }, [onSettled])
   useEffect(() => {
     let active = true
+    let refreshing = false
     let timer: ReturnType<typeof setTimeout>
-    const reconnect = new Set(retainedRequestIds())
     const stalePoll = Symbol('stale poll')
+    function forgetRequest(id: string, missing = false) {
+      requests.current.delete(id)
+      if (missing && readRecovery('import-last-request-id') === id)
+        saveRecovery('import-last-request-id', null)
+      retainedRequests.current.delete(id)
+      saveRecovery('import-request-ids', [...retainedRequests.current])
+      saveRecovery(
+        'open-akiya.import-request-ids',
+        recoveryIds('open-akiya.import-request-ids').filter(
+          (item) => item !== id,
+        ),
+      )
+    }
     async function refresh() {
+      if (refreshing) return
+      refreshing = true
       const startedAtRevision = revision.current
+      let inspectionFailed = false
       function ensureCurrent() {
         if (!active || startedAtRevision !== revision.current) throw stalePoll
       }
-      try {
-        const activeJobs = (
-          await window.openAkiya.listImports({ state: 'active' })
-        ).jobs
-        ensureCurrent()
-        for (const job of activeJobs) observedJobs.current.set(job.id, job)
-        for (const id of reconnect) {
-          let restored: ImportRequest
-          try {
-            restored = await window.openAkiya.inspectImportRequest(id)
-          } catch (failure) {
-            ensureCurrent()
-            if (
-              failure &&
-              typeof failure === 'object' &&
-              'code' in failure &&
-              failure.code === 'NOT_FOUND'
-            ) {
-              reconnect.delete(id)
-              forgetRequestId(id)
-              continue
-            }
-            throw failure
-          }
+      async function inspect<T>(
+        operation: () => Promise<T>,
+        missing?: () => void,
+      ): Promise<T | undefined> {
+        try {
+          const value = await operation()
           ensureCurrent()
-          requests.current.set(id, restored)
-          setRequestHistory((history) => [
-            ...history.filter((item) => item.id !== id),
-            restored,
-          ])
-          reconnect.delete(id)
+          return value
+        } catch (failure) {
+          ensureCurrent()
+          if (
+            missing &&
+            failure &&
+            typeof failure === 'object' &&
+            'code' in failure &&
+            failure.code === 'NOT_FOUND'
+          )
+            missing()
+          else inspectionFailed = true
+          return undefined
+        }
+      }
+      try {
+        const activeJobs =
+          (
+            await inspect(() =>
+              window.openAkiya.listImports({ state: 'active' }),
+            )
+          )?.jobs ?? []
+        ensureCurrent()
+        for (const job of activeJobs) {
+          observedJobs.current.set(job.id, job)
+          retainedJobs.current.add(job.id)
         }
         for (const [id, snapshot] of requests.current) {
-          const nextRequest = await window.openAkiya.inspectImportRequest(id)
-          ensureCurrent()
-          requests.current.set(id, nextRequest)
-          setRequestHistory((history) =>
-            history.map((item) => (item.id === id ? nextRequest : item)),
+          const nextRequest = await inspect(
+            () => window.openAkiya.inspectImportRequest(id),
+            () => forgetRequest(id, true),
           )
+          if (!nextRequest) continue
+          requests.current.set(id, nextRequest)
+          setRequestHistory((history) => [
+            ...history.filter((item) => item.id !== id),
+            nextRequest,
+          ])
           if (requestRef.current === id) setRequest(nextRequest)
           for (const jobId of nextRequest.jobIds) {
-            const job = await window.openAkiya.inspectImport(jobId)
-            ensureCurrent()
-            observedJobs.current.set(job.id, job)
+            retainedJobs.current.add(jobId)
+            const job = await inspect(() =>
+              window.openAkiya.inspectImport(jobId),
+            )
+            if (job) observedJobs.current.set(job.id, job)
           }
           if (
             isTerminal(nextRequest.state) &&
@@ -128,28 +139,29 @@ export default function ImportControls({
               const job = observedJobs.current.get(jobId)
               return job !== undefined && isTerminal(job.state)
             })
-          ) {
-            requests.current.delete(id)
-            forgetRequestId(id)
-          }
+          )
+            forgetRequest(id)
           if (
-            snapshot.state !== nextRequest.state &&
+            snapshot?.state !== nextRequest.state &&
             isTerminal(nextRequest.state)
           )
             settled.current()
         }
-        // Active jobs disappear from the queue at completion; inspect retained IDs.
-        for (const [id, snapshot] of observedJobs.current) {
+        for (const id of retainedJobs.current) {
+          const snapshot = observedJobs.current.get(id)
           if (
-            !isTerminal(snapshot.state) &&
+            (!snapshot || !isTerminal(snapshot.state)) &&
             !activeJobs.some((job) => job.id === id)
           ) {
-            const response = await window.openAkiya.inspectImport(id)
-            ensureCurrent()
-            observedJobs.current.set(id, response)
+            const job = await inspect(
+              () => window.openAkiya.inspectImport(id),
+              () => retainedJobs.current.delete(id),
+            )
+            if (job) observedJobs.current.set(id, job)
           }
         }
         ensureCurrent()
+        saveRecovery('import-job-ids', [...retainedJobs.current])
         const next = [
           ...activeJobs.map((job) => observedJobs.current.get(job.id) ?? job),
           ...[...observedJobs.current.values()].filter(
@@ -164,14 +176,24 @@ export default function ImportControls({
           settled.current()
         }
         setJobs(next)
-        setWorkerError('')
+        setWorkerError(
+          inspectionFailed
+            ? 'Reconnecting to import worker. Saved listings and successful-check times are retained. This is not an import failure.'
+            : '',
+        )
       } catch (failure) {
         if (active && failure !== stalePoll)
           setWorkerError(
-            'Import worker unavailable. Saved listings are retained. Quit and reopen to recover.',
+            'Reconnecting to import worker. Saved listings and successful-check times are retained. This is not an import failure.',
           )
+      } finally {
+        refreshing = false
+        if (active) timer = setTimeout(refresh, 500)
       }
-      if (active) timer = setTimeout(refresh, 500)
+    }
+    retryRecovery.current = () => {
+      clearTimeout(timer)
+      void refresh()
     }
     void refresh()
     return () => {
@@ -196,7 +218,12 @@ export default function ImportControls({
               area,
               idempotencyKey,
             })
-            retainRequestId(accepted.id)
+            revision.current++
+            saveRecovery('import-last-request-id', accepted.id)
+            retainedRequests.current.add(accepted.id)
+            saveRecovery('import-request-ids', [...retainedRequests.current])
+            for (const id of accepted.jobIds) retainedJobs.current.add(id)
+            saveRecovery('import-job-ids', [...retainedJobs.current])
             requests.current.set(accepted.id, accepted)
             setRequestHistory((history) => [
               ...history.filter((item) => item.id !== accepted.id),
@@ -279,6 +306,11 @@ export default function ImportControls({
         launcher. Use Quit Open Akiya or Ctrl/Cmd+Q to exit.
       </p>
       {(error || workerError) && <p role="alert">{error || workerError}</p>}
+      {workerError && (
+        <button onClick={() => retryRecovery.current()}>
+          Reconnect imports
+        </button>
+      )}
       <ul aria-label="Import queue" aria-live="polite">
         {jobs.map((job) => (
           <li key={job.id} aria-label={`Import job ${job.id}`}>

@@ -103,7 +103,7 @@ test('announces worker failure with a recovery action', async () => {
   })
   render(<ImportControls area={initialArea} onSettled={() => {}} />)
   expect(await screen.findByRole('alert')).toHaveTextContent(
-    'Quit and reopen to recover',
+    'Reconnecting to import worker',
   )
   expect(screen.queryByText('private failure')).not.toBeInTheDocument()
 })
@@ -251,18 +251,18 @@ test.each(['pending follow-up', 'running shared job'])(
         await vi.advanceTimersByTimeAsync(1000)
       })
       expect(api.inspectImportRequest).toHaveBeenCalledTimes(2)
-      expect(
-        JSON.parse(localStorage.getItem('open-akiya.import-request-ids')!),
-      ).toEqual([cachedImportRequest.id])
+      expect(JSON.parse(localStorage.getItem('import-request-ids')!)).toEqual([
+        cachedImportRequest.id,
+      ])
       finished = true
       settled.mockClear()
       await act(async () => {
         await vi.advanceTimersByTimeAsync(500)
       })
       expect(api.inspectImportRequest).toHaveBeenCalledTimes(3)
-      expect(
-        JSON.parse(localStorage.getItem('open-akiya.import-request-ids')!),
-      ).toEqual([])
+      expect(JSON.parse(localStorage.getItem('import-request-ids')!)).toEqual(
+        [],
+      )
       expect(screen.getByText(/Request accepted.*cached/)).toBeVisible()
       expect(
         screen.getByRole('list', { name: 'Import queue' }),
@@ -362,6 +362,7 @@ test('distinguishes request intent from shared execution and retains every accep
   expect(
     screen.getAllByRole('button', { name: 'Cancel request intent' }),
   ).toHaveLength(2)
+  await screen.findByRole('button', { name: 'Cancel running job' })
   fireEvent.click(
     screen.getAllByRole('button', { name: 'Cancel request intent' })[0]!,
   )
@@ -476,6 +477,7 @@ test('cancels a pending follow-up intent using its returned state while shared w
     await import('../../shared/manual-refresh-fixtures')
   const api = setup({
     createImportRequest: vi.fn(async () => manualRefreshFixtures.attached),
+    inspectImportRequest: vi.fn(async () => manualRefreshFixtures.attached),
     cancelImportRequest: vi.fn(async () => manualRefreshFixtures.cancelled),
     listImports: vi.fn(async () => ({ jobs: [job] })),
   })
@@ -487,6 +489,7 @@ test('cancels a pending follow-up intent using its returned state while shared w
   expect(
     screen.getByRole('list', { name: 'Your import requests' }),
   ).toHaveTextContent('Follow-up pending')
+  await screen.findByRole('button', { name: 'Cancel running job' })
   fireEvent.click(screen.getByRole('button', { name: 'Cancel request intent' }))
   await waitFor(() =>
     expect(
@@ -560,7 +563,7 @@ test.each(['job', 'request'])(
 
 test('drops missing reconnect IDs without hiding healthy requests and queue work', async () => {
   localStorage.setItem(
-    'open-akiya.import-request-ids',
+    'import-request-ids',
     JSON.stringify(['missing', queuedImportRequest.id]),
   )
   const api = setup({
@@ -579,9 +582,9 @@ test('drops missing reconnect IDs without hiding healthy requests and queue work
     screen.getByRole('button', { name: 'Cancel running job' }),
   ).toBeVisible()
   expect(screen.queryByRole('alert')).toBeNull()
-  expect(
-    JSON.parse(localStorage.getItem('open-akiya.import-request-ids')!),
-  ).toEqual([queuedImportRequest.id])
+  expect(JSON.parse(localStorage.getItem('import-request-ids')!)).toEqual([
+    queuedImportRequest.id,
+  ])
   expect(api.createImportRequest).not.toHaveBeenCalled()
 })
 
@@ -589,7 +592,7 @@ test('retains reconnect IDs on transient inspection failure and retries them', a
   vi.useFakeTimers()
   try {
     localStorage.setItem(
-      'open-akiya.import-request-ids',
+      'import-request-ids',
       JSON.stringify([queuedImportRequest.id]),
     )
     const inspect = vi
@@ -603,11 +606,11 @@ test('retains reconnect IDs on transient inspection failure and retries them', a
       render(<ImportControls area={initialArea} onSettled={() => {}} />)
     })
     expect(screen.getByRole('alert')).toHaveTextContent(
-      'Import worker unavailable',
+      'Reconnecting to import worker',
     )
-    expect(
-      JSON.parse(localStorage.getItem('open-akiya.import-request-ids')!),
-    ).toEqual([queuedImportRequest.id])
+    expect(JSON.parse(localStorage.getItem('import-request-ids')!)).toEqual([
+      queuedImportRequest.id,
+    ])
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500)
     })
@@ -620,4 +623,158 @@ test('retains reconnect IDs on transient inspection failure and retries them', a
     cleanup()
     vi.useRealTimers()
   }
+})
+
+test('reload recovers the same request and terminal linked job without submitting again', async () => {
+  const api = setup({
+    inspectImportRequest: vi.fn(async () => cachedImportRequest),
+    inspectImport: vi.fn(async () => succeededImportJob),
+  })
+  const first = render(
+    <ImportControls area={initialArea} onSettled={() => {}} />,
+  )
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Import sample listings' }),
+  )
+  await screen.findByText(/Request accepted/)
+  first.unmount()
+  render(
+    <ImportControls
+      area={{ ...initialArea, radiusKm: 1 }}
+      onSettled={() => {}}
+    />,
+  )
+  await waitFor(() =>
+    expect(api.inspectImportRequest).toHaveBeenCalledWith(
+      queuedImportRequest.id,
+    ),
+  )
+  expect(await screen.findByText(/Request accepted.*cached/)).toHaveTextContent(
+    '5 km',
+  )
+  expect(screen.getByRole('list', { name: 'Import queue' })).toHaveTextContent(
+    'Search finished',
+  )
+  expect(api.createImportRequest).toHaveBeenCalledTimes(1)
+})
+
+test('reconnect retains progress through inspection failure and discovers pending follow-up jobs', async () => {
+  vi.useFakeTimers()
+  try {
+    const { manualRefreshFixtures: fixture } =
+      await import('../../shared/manual-refresh-fixtures')
+    const api = setup({
+      createImportRequest: vi.fn(async () => fixture.attached),
+      inspectImportRequest: vi.fn(async () => fixture.attached),
+      inspectImport: vi.fn(async () => fixture.ordinary),
+    })
+    const first = render(
+      <ImportControls area={initialArea} onSettled={() => {}} />,
+    )
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: 'Import sample listings' }),
+      )
+    })
+    first.unmount()
+    const settled = vi.fn()
+    await act(async () => {
+      render(<ImportControls area={initialArea} onSettled={settled} />)
+    })
+    expect(screen.getByRole('status')).toBeVisible()
+    expect(
+      screen.getByRole('list', { name: 'Import queue' }),
+    ).toHaveTextContent(fixture.ordinary.coverage.lastSuccessfulCheckAt!)
+    api.inspectImportRequest = vi.fn(async () => {
+      throw new Error('connection lost')
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'This is not an import failure',
+    )
+    expect(
+      screen.getByRole('list', { name: 'Import queue' }),
+    ).toHaveTextContent('1 saved')
+    api.inspectImportRequest = vi.fn(async () => fixture.pending)
+    api.inspectImport = vi.fn(async (id) =>
+      id === fixture.ordinary.id ? fixture.ordinary : fixture.queued,
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Reconnect imports' }))
+    })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(api.inspectImport).toHaveBeenCalledWith(fixture.queued.id)
+    expect(screen.getByRole('status')).toBeVisible()
+    api.inspectImportRequest = vi.fn(async () => fixture.completed)
+    api.inspectImport = vi.fn(async (id) =>
+      id === fixture.ordinary.id ? fixture.ordinary : fixture.succeeded,
+    )
+    settled.mockClear()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(screen.queryByText(/Follow-up pending/)).toBeNull()
+    expect(
+      screen.getByRole('list', { name: 'Import queue' }),
+    ).toHaveTextContent('1 updated')
+    expect(settled).toHaveBeenCalled()
+    expect(api.createImportRequest).toHaveBeenCalledTimes(1)
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
+})
+
+test.each(['cancelled', 'failed'] as const)(
+  'reload inspects %s work without resuming or reopening it',
+  async (state) => {
+    const terminal = { ...cachedImportRequest, state }
+    const api = setup({
+      createImportRequest: vi.fn(async () => terminal),
+      inspectImportRequest: vi.fn(async () => terminal),
+      inspectImport: vi.fn(async () => ({ ...succeededImportJob, state })),
+    })
+    const first = render(
+      <ImportControls area={initialArea} onSettled={() => {}} />,
+    )
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Import sample listings' }),
+    )
+    await screen.findByText(/Request accepted/)
+    first.unmount()
+    render(<ImportControls area={initialArea} onSettled={() => {}} />)
+    expect(
+      await screen.findByText(new RegExp('Request accepted.*' + state)),
+    ).toBeVisible()
+    expect(api.createImportRequest).toHaveBeenCalledTimes(1)
+    expect(api.cancelImport).not.toHaveBeenCalled()
+  },
+)
+
+test('one unavailable request does not hide other recovered work or prevent new imports', async () => {
+  localStorage.setItem(
+    'import-request-ids',
+    JSON.stringify(['missing', queuedImportRequest.id]),
+  )
+  const api = setup({
+    inspectImportRequest: vi.fn(async (id) => {
+      if (id === 'missing') throw new Error('not found')
+      return cachedImportRequest
+    }),
+    inspectImport: vi.fn(async () => succeededImportJob),
+  })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  expect(await screen.findByText(/Request accepted.*cached/)).toBeVisible()
+  expect(screen.getByRole('list', { name: 'Import queue' })).toHaveTextContent(
+    'Search finished',
+  )
+  expect(
+    screen.getByRole('button', { name: 'Reconnect imports' }),
+  ).toBeEnabled()
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Import sample listings' }),
+  )
+  await waitFor(() => expect(api.createImportRequest).toHaveBeenCalledTimes(1))
 })
