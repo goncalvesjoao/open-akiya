@@ -203,53 +203,58 @@ export default function ImportControls({
   }, [])
   return (
     <section aria-label="Area imports" className="imports">
-      <button
-        disabled={creating}
-        onClick={async () => {
-          setCreating(true)
-          setError('')
-          const scope = JSON.stringify(area)
-          if (pendingAction.current?.scope !== scope)
-            pendingAction.current = { scope, key: crypto.randomUUID() }
-          const idempotencyKey = pendingAction.current.key
-          try {
-            const accepted = await window.openAkiya.createImportRequest({
-              intent: 'import',
-              area,
-              idempotencyKey,
-            })
-            revision.current++
-            saveRecovery('import-last-request-id', accepted.id)
-            retainedRequests.current.add(accepted.id)
-            saveRecovery('import-request-ids', [...retainedRequests.current])
-            for (const id of accepted.jobIds) retainedJobs.current.add(id)
-            saveRecovery('import-job-ids', [...retainedJobs.current])
-            requests.current.set(accepted.id, accepted)
-            setRequestHistory((history) => [
-              ...history.filter((item) => item.id !== accepted.id),
-              accepted,
-            ])
-            requestRef.current = accepted.id
-            setRequest(accepted)
-            if (isTerminal(accepted.state)) settled.current()
-            // A fast import can finish between active-queue reads.
-            previous.current = ''
-            pendingAction.current = null
-          } catch (failure) {
-            const code =
-              failure && typeof failure === 'object' && 'code' in failure
-                ? String(failure.code)
-                : 'TRANSPORT_ERROR'
-            setError(
-              `Could not start import (${code}). Inspect the queue before retrying.`,
-            )
-          } finally {
-            setCreating(false)
-          }
-        }}
-      >
-        Import sample listings
-      </button>
+      {(['import', 'manual_refresh'] as const).map((intent) => (
+        <button
+          key={intent}
+          disabled={creating}
+          onClick={async () => {
+            setCreating(true)
+            setError('')
+            const scope = JSON.stringify({ area, intent })
+            if (pendingAction.current?.scope !== scope)
+              pendingAction.current = { scope, key: crypto.randomUUID() }
+            const idempotencyKey = pendingAction.current.key
+            try {
+              const accepted = await window.openAkiya.createImportRequest({
+                intent,
+                area,
+                idempotencyKey,
+              })
+              revision.current++
+              saveRecovery('import-last-request-id', accepted.id)
+              retainedRequests.current.add(accepted.id)
+              saveRecovery('import-request-ids', [...retainedRequests.current])
+              for (const id of accepted.jobIds) retainedJobs.current.add(id)
+              saveRecovery('import-job-ids', [...retainedJobs.current])
+              requests.current.set(accepted.id, accepted)
+              setRequestHistory((history) => [
+                ...history.filter((item) => item.id !== accepted.id),
+                accepted,
+              ])
+              requestRef.current = accepted.id
+              setRequest(accepted)
+              if (isTerminal(accepted.state)) settled.current()
+              // A fast import can finish between active-queue reads.
+              previous.current = ''
+              pendingAction.current = null
+            } catch (failure) {
+              const code =
+                failure && typeof failure === 'object' && 'code' in failure
+                  ? String(failure.code)
+                  : 'TRANSPORT_ERROR'
+              setError(
+                `Could not start ${intent === 'manual_refresh' ? 'refresh' : 'import'} (${code}). Inspect the queue before retrying.`,
+              )
+            } finally {
+              setCreating(false)
+            }
+          }}
+        >
+          {intent === 'manual_refresh'
+            ? 'Refresh anyway'
+            : 'Import sample listings'}
+        </button>
+      ))}
       {request && (
         <p role="status">
           Request accepted · {request.disposition} · {request.state}
@@ -261,6 +266,17 @@ export default function ImportControls({
       <ul aria-label="Your import requests" aria-live="polite">
         {requestHistory.map((item) => (
           <li key={item.id} aria-label={`Import request ${item.id}`}>
+            {item.intent === 'manual_refresh' && (
+              <p>
+                {item.pendingFollowUp || !isTerminal(item.state)
+                  ? 'Refresh pending'
+                  : item.state === 'succeeded'
+                    ? 'Refresh succeeded'
+                    : item.state === 'partial'
+                      ? 'Refresh incomplete · Saved results retained. Explicit continuation is required for remaining work.'
+                      : `Refresh ${item.state} · Saved results retained.`}
+              </p>
+            )}
             Request {item.id} · {item.disposition} · {item.state} · Request
             area: {item.area.center.latitude}, {item.area.center.longitude} ·{' '}
             {item.area.radiusKm} km
@@ -271,7 +287,7 @@ export default function ImportControls({
               may continue for other requests; inspect the linked job state
               below.
             </p>
-            {!isTerminal(item.state) && (
+            {(!isTerminal(item.state) || item.pendingFollowUp) && (
               <button
                 onClick={async () => {
                   setError('')
@@ -329,6 +345,10 @@ export default function ImportControls({
             · {job.area.radiusKm} km ·{' '}
             {job.counts.added + job.counts.updated + job.counts.unchanged} saved
             ({job.counts.added} added, {job.counts.updated} updated)
+            <p>
+              Counts apply to this job only; listings can appear in multiple
+              jobs.
+            </p>
             <span>
               {' '}
               · Stage: {job.stage} · {job.counts.discovered} discovered ·{' '}

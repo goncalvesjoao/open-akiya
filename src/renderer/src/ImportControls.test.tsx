@@ -482,9 +482,7 @@ test('cancels a pending follow-up intent using its returned state while shared w
     listImports: vi.fn(async () => ({ jobs: [job] })),
   })
   render(<ImportControls area={initialArea} onSettled={() => {}} />)
-  fireEvent.click(
-    screen.getByRole('button', { name: 'Import sample listings' }),
-  )
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh anyway' }))
   await screen.findByRole('button', { name: 'Cancel request intent' })
   expect(
     screen.getByRole('list', { name: 'Your import requests' }),
@@ -777,4 +775,159 @@ test('one unavailable request does not hide other recovered work or prevent new 
     screen.getByRole('button', { name: 'Import sample listings' }),
   )
   await waitFor(() => expect(api.createImportRequest).toHaveBeenCalledTimes(1))
+})
+
+test('submits explicit manual refresh intent and consumes repeated server attachment outcomes', async () => {
+  const { manualRefreshFixtures: refresh } =
+    await import('../../shared/manual-refresh-fixtures')
+  const api = setup({
+    createImportRequest: vi.fn(async () => refresh.attached),
+  })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh anyway' }))
+  await screen.findByText(/Request accepted.*attached/)
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh anyway' }))
+  await waitFor(() => expect(api.createImportRequest).toHaveBeenCalledTimes(2))
+  const calls = vi.mocked(api.createImportRequest).mock.calls
+  expect(calls[0]![0]).toEqual({
+    area: initialArea,
+    intent: 'manual_refresh',
+    idempotencyKey: expect.any(String),
+  })
+  expect(calls[1]![0].idempotencyKey).not.toBe(calls[0]![0].idempotencyKey)
+  expect(
+    screen.getByRole('list', { name: 'Your import requests' }),
+  ).toHaveTextContent('Follow-up pending')
+})
+
+test('keeps refresh pending through ordinary success and queued follow-up until final settlement', async () => {
+  const { manualRefreshFixtures: refresh } =
+    await import('../../shared/manual-refresh-fixtures')
+  vi.useFakeTimers()
+  try {
+    let phase: 'attached' | 'pending' | 'completed' = 'attached'
+    setup({
+      createImportRequest: vi.fn(async () => refresh.attached),
+      inspectImportRequest: vi.fn(async () => refresh[phase]),
+      inspectImport: vi.fn(async (id) =>
+        id === refresh.ordinary.id
+          ? refresh.ordinary
+          : phase === 'completed'
+            ? refresh.succeeded
+            : refresh.queued,
+      ),
+    })
+    const settled = vi.fn()
+    await act(async () => {
+      render(<ImportControls area={initialArea} onSettled={settled} />)
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh anyway' }))
+    })
+    phase = 'pending'
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(
+      screen.getByRole('list', { name: 'Your import requests' }),
+    ).toHaveTextContent('Refresh pending')
+    expect(screen.queryByText('Refresh succeeded')).toBeNull()
+    expect(
+      screen.getByRole('list', { name: 'Import queue' }),
+    ).toHaveTextContent('queued')
+    expect(
+      screen.getByRole('button', { name: 'Cancel queued job' }),
+    ).toBeVisible()
+    settled.mockClear()
+    phase = 'completed'
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500)
+    })
+    expect(screen.getByText('Refresh succeeded')).toBeVisible()
+    expect(settled).toHaveBeenCalled()
+  } finally {
+    cleanup()
+    vi.useRealTimers()
+  }
+})
+
+test.each(['failedRequest', 'exhausted', 'cancelled'] as const)(
+  'shows the final refresh %s outcome without success and retains successful job timestamps',
+  async (outcome) => {
+    const { manualRefreshFixtures: refresh } =
+      await import('../../shared/manual-refresh-fixtures')
+    const job =
+      outcome === 'failedRequest'
+        ? refresh.failed
+        : outcome === 'exhausted'
+          ? refresh.partial
+          : refresh.cancelledJob
+    setup({
+      createImportRequest: vi.fn(async () => refresh[outcome]),
+      inspectImportRequest: vi.fn(async () => refresh[outcome]),
+      inspectImport: vi.fn(async (id) =>
+        id === refresh.ordinary.id ? refresh.ordinary : job,
+      ),
+    })
+    render(<ImportControls area={initialArea} onSettled={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh anyway' }))
+    expect(
+      await screen.findByText(
+        /Refresh (failed|incomplete|cancelled).*Saved results retained/,
+      ),
+    ).toBeVisible()
+    expect(screen.queryByText('Refresh succeeded')).toBeNull()
+    await waitFor(() =>
+      expect(
+        screen.getByRole('list', { name: 'Import queue' }),
+      ).toHaveTextContent(refresh.ordinary.coverage.lastSuccessfulCheckAt!),
+    )
+    if (outcome === 'exhausted')
+      expect(
+        screen.getByText(/Explicit continuation is required/),
+      ).toBeVisible()
+  },
+)
+
+test('retries a lost refresh acknowledgement with its original action key', async () => {
+  const { manualRefreshFixtures: refresh } =
+    await import('../../shared/manual-refresh-fixtures')
+  const keys: string[] = []
+  setup({
+    createImportRequest: vi.fn(async (input) => {
+      keys.push(input.idempotencyKey)
+      if (keys.length === 1) throw new Error('lost acknowledgement')
+      return refresh.attached
+    }),
+  })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh anyway' }))
+  await screen.findByRole('alert')
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh anyway' }))
+  await screen.findByText(/Request accepted.*attached/)
+  expect(keys).toHaveLength(2)
+  expect(keys[1]).toBe(keys[0])
+})
+
+test('cancels queued refresh follow-up execution explicitly', async () => {
+  const { manualRefreshFixtures: refresh } =
+    await import('../../shared/manual-refresh-fixtures')
+  const api = setup({
+    createImportRequest: vi.fn(async () => refresh.pending),
+    inspectImportRequest: vi.fn(async () => refresh.pending),
+    inspectImport: vi.fn(async (id) =>
+      id === refresh.ordinary.id ? refresh.ordinary : refresh.queued,
+    ),
+    cancelImport: vi.fn(async () => refresh.cancelledJob),
+  })
+  render(<ImportControls area={initialArea} onSettled={() => {}} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh anyway' }))
+  fireEvent.click(
+    await screen.findByRole('button', { name: 'Cancel queued job' }),
+  )
+  await waitFor(() =>
+    expect(api.cancelImport).toHaveBeenCalledWith(refresh.queued.id),
+  )
+  expect(await screen.findByText('Cancelled')).toBeVisible()
+  expect(api.cancelImportRequest).not.toHaveBeenCalled()
 })
