@@ -129,10 +129,42 @@ test('imports the explicitly selected synthetic area and retains saved results a
     const queue = session.page.getByRole('list', { name: 'Import queue' })
     await expect(queue).toContainText(/Stage: (discovering|fetching|saving)/)
     await expect(queue).toContainText('discovered')
+    const accepted = await session.page.evaluate(
+      async () =>
+        (
+          await window.openAkiya.inspectImportRequest(
+            JSON.parse(localStorage.getItem('import-request-ids')!)[0],
+          )
+        ).jobIds[0],
+    )
+    await session.page.getByLabel('Radius (km)', { exact: true }).fill('4')
+    await session.page.getByRole('button', { name: 'Apply area' }).click()
     await session.page.reload()
+    await expect(
+      session.page.getByLabel('Radius (km)', { exact: true }),
+    ).toHaveValue('4')
+    await expect(
+      session.page.getByText(/Request accepted · created/),
+    ).toBeVisible()
+    expect(
+      await session.page.evaluate(
+        async (id) => (await window.openAkiya.inspectImport(id)).area.radiusKm,
+        accepted,
+      ),
+    ).toBe(5)
     await expect(
       session.page.getByRole('list', { name: 'Import queue' }),
     ).toContainText('Job area: 35, 135')
+    // Interrupt the real runtime after reconnect; the same durable request must
+    // remain inspectable and discover its committed results on launcher restart.
+    await session.application.close()
+    session = await launch()
+    await expect(
+      session.page.getByText(/Request accepted · created/),
+    ).toBeVisible()
+    await expect(
+      session.page.getByLabel('Radius (km)', { exact: true }),
+    ).toHaveValue('4')
     const listing = session.page.getByRole('button', {
       name: 'Sample sale listing',
       exact: true,
@@ -166,6 +198,15 @@ test('imports the explicitly selected synthetic area and retains saved results a
         exact: true,
       }),
     ).toBeVisible()
+    await expect(
+      session.page.getByLabel('Radius (km)', { exact: true }),
+    ).toHaveValue('4')
+    await expect(
+      session.page.getByText(/Request accepted · created/),
+    ).toBeVisible()
+    await expect(
+      session.page.getByRole('list', { name: 'Import queue' }),
+    ).toContainText('Search finished')
     const boundary = await session.page.evaluate(() => ({
       methods: Object.keys(window.openAkiya).sort(),
       nodeVisible: 'require' in window || 'process' in window,

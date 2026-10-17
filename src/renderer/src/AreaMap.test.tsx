@@ -18,7 +18,10 @@ import { initialArea } from '../../shared/geography'
 import { listingTitle } from './listings/presentation'
 import type { AreaResults } from '../../shared/listings'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  localStorage.clear()
+})
 
 test('keeps municipality offers in expandable groups without duplicate rows or fabricated house distances', async () => {
   const listings = municipalityFixtures
@@ -407,4 +410,51 @@ test('shows unknown successful-check times directly beside saved listings before
   expect(
     screen.getByRole('list', { name: 'Listing results' }),
   ).toHaveTextContent('Last successful check: Unknown')
+})
+
+test('reload retains the current selected area independently of the recovered import area', async () => {
+  const areaResults = vi.fn(
+    async (query: import('../../shared/listings').AreaQuery) => ({
+      ...query,
+      mode: 'synthetic',
+      listings: [],
+      municipalityGroups: [],
+      coverage: {
+        status: 'unknown',
+        lastSuccessfulCheckAt: null,
+        freshUntil: null,
+        scopeKey: null,
+        caveats: [],
+      },
+      generatedAt: '2026-10-15T00:00:00Z',
+    }),
+  )
+  Object.defineProperty(window, 'openAkiya', {
+    configurable: true,
+    value: { areaResults, listImports: vi.fn(async () => ({ jobs: [] })) },
+  })
+  const first = render(<AreaMap />)
+  fireEvent.change(screen.getByLabelText('Latitude'), {
+    target: { value: '36' },
+  })
+  fireEvent.change(screen.getByLabelText('Radius (km)'), {
+    target: { value: '2' },
+  })
+  fireEvent.click(screen.getByRole('button', { name: 'Apply area' }))
+  await waitFor(() =>
+    expect(areaResults).toHaveBeenLastCalledWith({
+      area: { center: { latitude: 36, longitude: 135 }, radiusKm: 2 },
+      showUnavailable: false,
+    }),
+  )
+  first.unmount()
+  render(<AreaMap />)
+  expect(screen.getByLabelText('Latitude')).toHaveValue('36')
+  expect(screen.getByLabelText('Radius (km)')).toHaveValue('2')
+  await waitFor(() =>
+    expect(areaResults).toHaveBeenLastCalledWith({
+      area: { center: { latitude: 36, longitude: 135 }, radiusKm: 2 },
+      showUnavailable: false,
+    }),
+  )
 })
