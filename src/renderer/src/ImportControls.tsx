@@ -75,9 +75,10 @@ export default function ImportControls({
           if (!active) return
           requests.current.set(id, nextRequest)
           if (requestRef.current === id) setRequest(nextRequest)
-          for (const jobId of nextRequest.jobIds) {
+          for (const jobId of nextRequest.jobIds)
             retainedJobs.current.add(jobId)
-            saveRecovery('import-job-ids', [...retainedJobs.current])
+          saveRecovery('import-job-ids', [...retainedJobs.current])
+          for (const jobId of nextRequest.jobIds) {
             const job = await inspect(() =>
               window.openAkiya.inspectImport(jobId),
             )
