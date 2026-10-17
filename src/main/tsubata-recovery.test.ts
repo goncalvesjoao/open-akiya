@@ -796,3 +796,51 @@ test('a failed export and an absent offer never extend an earlier successful off
     runtime.results({ area: initialArea, showUnavailable: true }).listings[0],
   ).toEqual(saved)
 })
+
+test('worker shutdown recovers an interrupted acquired snapshot without replaying committed rows or HTTP', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const directory = mkdtempSync(join(tmpdir(), 'tsubata-restart-'))
+  const path = join(directory, 'db.sqlite')
+  let attempts = 0
+  const options = {
+    ...testClock(0),
+    adapters: [adapter()],
+    transport: async () => {
+      attempts++
+      return { status: 200, body: csv + row('000000002') + row('000000003') }
+    },
+  }
+  let runtime = openRuntime(path, 0, options)
+  runtimes.push(runtime)
+  try {
+    const first = runtime.createRequest({
+      area: initialArea,
+      intent: 'import',
+      idempotencyKey: 'interrupted',
+    })
+    const id = first.jobIds[0]
+    for (
+      const deadline = Date.now() + 3000;
+      Date.now() < deadline && runtime.inspect(id).counts.added === 0;
+    )
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    await runtime.close()
+    runtime = openRuntime(path, 0, options)
+    runtimes.push(runtime)
+    await expect.poll(() => runtime.inspect(id).stage).toBe('finished')
+    expect(runtime.inspect(id)).toMatchObject({
+      state: 'succeeded',
+      counts: { checked: 3, added: 3 },
+      budget: { discoveryUsed: 1, detailUsed: 0 },
+    })
+    expect(
+      runtime.results({ area: initialArea, showUnavailable: true }).listings,
+    ).toHaveLength(3)
+    expect(attempts).toBe(1)
+  } finally {
+    await runtime.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
