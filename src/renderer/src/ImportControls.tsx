@@ -243,7 +243,7 @@ export default function ImportControls({
                   ? String(failure.code)
                   : 'TRANSPORT_ERROR'
               setError(
-                `Could not start import (${code}). Inspect the queue before retrying.`,
+                `Could not start ${intent === 'manual_refresh' ? 'refresh' : 'import'} (${code}). Inspect the queue before retrying.`,
               )
             } finally {
               setCreating(false)
