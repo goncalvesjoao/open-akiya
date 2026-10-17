@@ -1,5 +1,6 @@
 // Node child-process harness for the worker API. No production fault hooks or
 // database inspection: interruption gates sit at synthetic adapter boundaries.
+import { existsSync } from 'node:fs'
 import { ImportRuntime } from '../runtime'
 import { syntheticAdapter } from '../adapter'
 import { testClock } from '../test-clock'
@@ -8,6 +9,8 @@ import type { Operation } from '../../shared/desktop'
 
 const [path, mode, epoch] = process.argv.slice(2)
 const clock = testClock(Number(epoch))
+let clockReads = 0
+let clockArmed = false
 const base = syntheticAdapter(0)
 let release: (() => void) | undefined
 let requestId: string | undefined
@@ -31,6 +34,19 @@ async function gate(boundary: string) {
 const starts: number[] = []
 const runtime = new ImportRuntime(path, 0, {
   ...clock,
+  now: () => {
+    // Freeze the external clock inside the third request-time read: ownership
+    // was read, but the initial attempt has not yet been accounted for.
+    if (mode === 'account-race' && clockArmed && ++clockReads === 3) {
+      process.send?.({ event: 'clock-check' })
+      const timeout = Date.now() + 10000
+      while (!existsSync(`${path}.release-clock`)) {
+        if (Date.now() >= timeout) throw new Error('Clock gate timed out')
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5)
+      }
+    }
+    return clock.now()
+  },
   ...(mode.startsWith('budget') ? { discoveryLimit: 3 } : {}),
   leaseMs: mode === 'retry' || mode === 'retry-recovery' ? 1000 : 30000,
   wait: async (milliseconds, signal) => {
@@ -49,6 +65,7 @@ const runtime = new ImportRuntime(path, 0, {
     {
       ...base,
       async discover(input, context) {
+        clockArmed = mode === 'account-race'
         if (mode === 'unacknowledged') await new Promise<void>(() => {})
         const page = await base.discover(input, context)
         return {
