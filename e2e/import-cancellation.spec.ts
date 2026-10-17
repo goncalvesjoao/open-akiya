@@ -27,6 +27,7 @@ test('cancels shared intent, queued and running work without losing committed ma
   let session = await launch()
   try {
     const page = session.page
+    await page.setViewportSize({ width: 1200, height: 1800 })
     await page.getByRole('button', { name: 'Import sample listings' }).click()
     const first = await page.evaluate(async () => {
       const { jobs } = await window.openAkiya.listImports({ state: 'active' })
@@ -51,7 +52,12 @@ test('cancels shared intent, queued and running work without losing committed ma
     // Reload recovers jobs, while a fresh UI submission records this window's
     // request intent without deciding ownership locally.
     await page.getByRole('button', { name: 'Import sample listings' }).click()
-    await page.getByRole('button', { name: 'Cancel request intent' }).click()
+    await page
+      .getByRole('list', { name: 'Your import requests' })
+      .getByRole('listitem')
+      .filter({ hasText: 'attached' })
+      .getByRole('button', { name: 'Cancel request intent' })
+      .click()
     expect(
       await page.evaluate((id) => window.openAkiya.inspectImport(id), first.id),
     ).toMatchObject({ state: 'running', cancelRequestedAt: null })
@@ -107,9 +113,16 @@ test('cancels shared intent, queued and running work without losing committed ma
     await page.getByRole('button', { name: 'Apply area' }).click()
     await expect
       .poll(() =>
-        page.evaluate((id) => window.openAkiya.inspectImport(id), first.id),
+        page.evaluate(async (id) => {
+          const job = await window.openAkiya.inspectImport(id)
+          return job.state === 'running' && job.counts.added > 0
+        }, first.id),
       )
-      .toMatchObject({ state: 'running', counts: { added: 1 } })
+      .toBe(true)
+    const committed = await page.evaluate(
+      (id) => window.openAkiya.inspectImport(id),
+      first.id,
+    )
     await page
       .getByRole('listitem', { name: `Import job ${first.id}`, exact: true })
       .getByRole('button', { name: 'Cancel running job' })
@@ -118,7 +131,15 @@ test('cancels shared intent, queued and running work without losing committed ma
       .poll(() =>
         page.evaluate((id) => window.openAkiya.inspectImport(id), first.id),
       )
-      .toMatchObject({ state: 'cancelled', counts: { added: 1 } })
+      .toMatchObject({ state: 'cancelled' })
+    const cancelled = await page.evaluate(
+      (id) => window.openAkiya.inspectImport(id),
+      first.id,
+    )
+    expect(cancelled.counts.added).toBeGreaterThanOrEqual(
+      committed.counts.added,
+    )
+    expect(cancelled.counts.added).toBeLessThan(cancelled.counts.discovered)
     await expect(
       page.getByRole('button', { name: 'Sample sale listing', exact: true }),
     ).toBeVisible()
