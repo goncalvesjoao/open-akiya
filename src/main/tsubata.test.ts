@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { ImportRuntime } from './runtime'
 import { testClock } from './test-clock'
 import { tsubataAdapter, TSUBATA_EXPORT } from './tsubata'
-import { initialArea } from '../shared/geography'
+import { areasIntersect, initialArea } from '../shared/geography'
 const directory = mkdtempSync(join(tmpdir(), 'akiya-tsubata-'))
 const runtimes: ImportRuntime[] = []
 afterEach(async () => {
@@ -332,4 +332,176 @@ test('free rental still requires an evidenced monthly period', async () => {
   expect(await imported(runtime)).toMatchObject({
     counts: { added: 0, rejected: 1 },
   })
+})
+
+test('a supported nonintersecting selection completes without fetching the municipal export', async () => {
+  const { runtime, requests } = open(
+    () => csv([row()]),
+    tsubataAdapter({
+      intersectsMunicipality: () => false,
+      geographyVersion: 'synthetic-nonintersecting',
+    }),
+  )
+  expect(await imported(runtime)).toMatchObject({
+    state: 'succeeded',
+    counts: { added: 0, checked: 0 },
+    budget: { discoveryUsed: 0, detailUsed: 0 },
+    coverage: { status: 'complete' },
+  })
+  expect(requests).toEqual([])
+  expect(runtime.results(query).listings).toEqual([])
+})
+
+test('synthetic municipal intersection retains uncertain offers even when its representative lies outside the selection', async () => {
+  // Authored circles exercise geographic gating without claiming real boundary evidence.
+  const municipality = {
+    center: { latitude: 35.06, longitude: 135 },
+    radiusKm: 5,
+  }
+  const area = { center: { latitude: 35, longitude: 135 }, radiusKm: 2 }
+  const representativePoint = { latitude: 35.1, longitude: 135 }
+  const requests: string[] = []
+  const runtime = new ImportRuntime(join(directory, `${++key}.sqlite`), 0, {
+    ...testClock(),
+    adapters: [
+      tsubataAdapter({
+        geographyVersion: 'fictional-circle-v1',
+        intersectsMunicipality: (selection) =>
+          areasIntersect(selection, municipality),
+      }),
+    ],
+    municipalityReference: (id, selection) =>
+      id === '173614' && areasIntersect(selection, municipality)
+        ? {
+            representativePoint,
+            representativePointProvenance:
+              'Authored fictional municipality reference, not a home',
+          }
+        : undefined,
+    transport: async (url) => {
+      requests.push(url)
+      return { status: 200, body: csv([row()]) }
+    },
+  })
+  runtimes.push(runtime)
+  const request = runtime.createRequest({
+    area,
+    intent: 'import',
+    idempotencyKey: String(++key),
+  })
+  await expect
+    .poll(() => runtime.inspect(request.jobIds[0]).stage)
+    .toBe('finished')
+  expect(runtime.inspect(request.jobIds[0])).toMatchObject({
+    state: 'succeeded',
+    coverage: { status: 'complete' },
+    budget: { discoveryUsed: 1, detailUsed: 0 },
+    counts: { checked: 1, added: 1 },
+  })
+  const results = runtime.results({ area, showUnavailable: true })
+  expect(results.listings).toHaveLength(1)
+  expect(results.listings[0].location).toEqual({
+    kind: 'municipality',
+    municipalityId: '173614',
+  })
+  expect(results.municipalityGroups).toEqual([
+    expect.objectContaining({
+      municipalityId: '173614',
+      count: 1,
+      representativePoint,
+      representativePointProvenance:
+        'Authored fictional municipality reference, not a home',
+    }),
+  ])
+  expect(
+    runtime.results({
+      area: { center: { latitude: 34, longitude: 135 }, radiusKm: 2 },
+      showUnavailable: true,
+    }).listings,
+  ).toEqual([])
+  expect(requests).toEqual([TSUBATA_EXPORT])
+})
+
+test('complete header-only EOF is a successful empty export, not a failed acquisition', async () => {
+  const { runtime, requests } = open(() => csv([]))
+  expect(await imported(runtime)).toMatchObject({
+    state: 'succeeded',
+    coverage: { status: 'complete' },
+    counts: { discovered: 0, checked: 0, added: 0 },
+    budget: { discoveryUsed: 1, detailUsed: 0 },
+  })
+  expect(requests).toEqual([TSUBATA_EXPORT])
+})
+
+test('the acquisition row cap cannot certify traversal or save an export prefix', async () => {
+  const { runtime, requests } = open(() =>
+    csv(
+      Array.from({ length: 1001 }, (_, i) =>
+        row({
+          ID: `TBB${String(i + 1).padStart(9, '0')}`,
+          所在地_町字: `字試験${i}`,
+        }),
+      ),
+    ),
+  )
+  expect(await imported(runtime)).toMatchObject({
+    state: 'failed',
+    error: { code: 'ROW_BUDGET_EXHAUSTED' },
+    coverage: { status: 'partial', lastSuccessfulCheckAt: null },
+    counts: { checked: 0, added: 0 },
+  })
+  expect(runtime.results(query).listings).toEqual([])
+  expect(requests).toEqual([TSUBATA_EXPORT])
+})
+
+test('file dates and descending IDs cannot stop later export rows or advance date checkpoints', async () => {
+  const path = join(directory, `${++key}.sqlite`)
+  const requests: string[] = []
+  let body = csv([row({ ID: 'TBB000000099' })])
+  const runtime = new ImportRuntime(path, 0, {
+    ...testClock(),
+    adapters: [
+      tsubataAdapter({
+        geographyVersion: 'fictional-circle-v1',
+        intersectsMunicipality: () => true,
+      }),
+    ],
+    municipalityReference: (id) =>
+      id === '173614'
+        ? { representativePoint: null, representativePointProvenance: null }
+        : undefined,
+    areaFreshnessMs: 0,
+    transport: async (url) => {
+      requests.push(url)
+      return {
+        status: 200,
+        headers: { 'Last-Modified': 'Wed, 14 Oct 2026 00:00:00 GMT' },
+        body,
+      }
+    },
+  })
+  runtimes.push(runtime)
+  const fault = new DatabaseSync(path)
+  // A successful job must never attempt a date checkpoint for this undated CSV.
+  fault.exec(
+    "CREATE TRIGGER no_csv_dates BEFORE INSERT ON discovery_checkpoints BEGIN SELECT RAISE(ABORT,'CSV has no reliable offer dates'); END",
+  )
+  try {
+    expect(await imported(runtime)).toMatchObject({
+      state: 'succeeded',
+      counts: { added: 1 },
+    })
+    body = csv([
+      row({ ID: 'TBB000000099' }),
+      row({ ID: 'TBB000000001', 所在地_町字: '字後行' }),
+    ])
+    expect(await imported(runtime)).toMatchObject({
+      state: 'succeeded',
+      counts: { discovered: 2, checked: 2, added: 1, unchanged: 1 },
+    })
+    expect(runtime.results(query).listings).toHaveLength(2)
+    expect(requests).toEqual([TSUBATA_EXPORT, TSUBATA_EXPORT])
+  } finally {
+    fault.close()
+  }
 })
