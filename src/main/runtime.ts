@@ -361,6 +361,9 @@ export class ImportRuntime {
       if (
         !active(job) &&
         job.state !== 'cancelled' &&
+        !job.sources.some(
+          (source) => source.error?.code === 'SOURCE_BLOCKED',
+        ) &&
         manual &&
         !manual.follow_up_queued
       ) {

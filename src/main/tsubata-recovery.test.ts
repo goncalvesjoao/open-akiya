@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from 'vitest'
 import { ImportRuntime } from './runtime'
+import { syntheticAdapter } from './adapter'
 import { testClock } from './test-clock'
 import { tsubataAdapter } from './tsubata'
 import { initialArea } from '../shared/geography'
@@ -923,3 +924,160 @@ test.each([401, 403, 'challenge'] as const)(
     }
   },
 )
+
+test.each([401, 403, 'challenge'] as const)(
+  'attached manual refresh cannot automatically retry a %s access block',
+  async (block) => {
+    const clock = testClock(0)
+    let blocked = false
+    let started = false
+    let attempts = 0
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const runtime = openRuntime(':memory:', 0, {
+      ...clock,
+      adapters: [adapter()],
+      transport: async () => {
+        attempts++
+        if (!blocked) return { status: 200, body: csv + row('000000002') }
+        if (!started) {
+          started = true
+          await gate
+        }
+        return {
+          status: block === 'challenge' ? 200 : block,
+          body: block === 'challenge' ? '<html>CAPTCHA</html>' : 'blocked',
+        }
+      },
+    })
+    runtimes.push(runtime)
+    const seed = runtime.createRequest({
+      area: initialArea,
+      intent: 'import',
+      idempotencyKey: 'attached-block-seed',
+    })
+    await expect
+      .poll(() => runtime.inspect(seed.jobIds[0]).stage)
+      .toBe('finished')
+    const saved = runtime.results({
+      area: initialArea,
+      showUnavailable: true,
+    }).listings
+    clock.advance(86400001)
+    attempts = 0
+    blocked = true
+    const ordinary = runtime.createRequest({
+      area: initialArea,
+      intent: 'import',
+      idempotencyKey: 'ordinary-blocked',
+    })
+    await expect.poll(() => started).toBe(true)
+    const manual = runtime.createRequest({
+      area: initialArea,
+      intent: 'manual_refresh',
+      idempotencyKey: 'attached-to-block',
+    })
+    expect(manual).toMatchObject({
+      disposition: 'attached',
+      pendingFollowUp: true,
+    })
+    release()
+    await expect
+      .poll(() => runtime.inspectRequest(manual.id).state)
+      .toBe('failed')
+    expect(runtime.inspectRequest(manual.id)).toMatchObject({
+      jobIds: [ordinary.jobIds[0]],
+      pendingFollowUp: false,
+      error: { code: 'SOURCE_BLOCKED' },
+    })
+    expect(runtime.inspect(ordinary.jobIds[0])).toMatchObject({
+      continuation: { available: true },
+      budget: { discoveryUsed: 1, detailUsed: 0 },
+    })
+    expect(runtime.list({ state: 'active' }).jobs).toEqual([])
+    expect(
+      runtime.results({ area: initialArea, showUnavailable: true }).listings,
+    ).toEqual(saved)
+    expect(attempts).toBe(1)
+    blocked = false
+    const next = runtime.createRequest({
+      intent: 'continue',
+      fromJobId: ordinary.jobIds[0],
+      idempotencyKey: 'explicit-after-attached-block',
+    })
+    await expect
+      .poll(() => runtime.inspect(next.jobIds[0]).stage)
+      .toBe('finished')
+    expect(runtime.inspect(next.jobIds[0])).toMatchObject({
+      state: 'succeeded',
+      counts: { checked: 2 },
+      budget: { discoveryUsed: 1, detailUsed: 0 },
+    })
+    expect(attempts).toBe(2)
+  },
+)
+
+test('a mixed-source access block retains committed offers and terminates attached manual intent as partial without a follow-up', async () => {
+  const clock = testClock(0)
+  let started = false
+  let townAttempts = 0
+  let release: () => void = () => {}
+  const gate = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const runtime = openRuntime(':memory:', 0, {
+    ...clock,
+    adapters: [syntheticAdapter(0), adapter()],
+    transport: async (url) => {
+      if (!url.includes('www.town.tsubata.lg.jp')) return { status: 200 }
+      townAttempts++
+      started = true
+      await gate
+      return { status: 403, body: 'blocked' }
+    },
+  })
+  runtimes.push(runtime)
+  const ordinary = runtime.createRequest({
+    area: initialArea,
+    intent: 'import',
+    idempotencyKey: 'mixed-ordinary',
+  })
+  await expect.poll(() => started).toBe(true)
+  const saved = runtime.results({
+    area: initialArea,
+    showUnavailable: true,
+  }).listings
+  expect(saved).toHaveLength(1)
+  clock.advance(1000)
+  const manual = runtime.createRequest({
+    area: initialArea,
+    intent: 'manual_refresh',
+    idempotencyKey: 'mixed-manual',
+  })
+  expect(manual.pendingFollowUp).toBe(true)
+  release()
+  await expect
+    .poll(() => runtime.inspectRequest(manual.id).state)
+    .toBe('partial')
+  expect(runtime.inspectRequest(manual.id)).toMatchObject({
+    jobIds: [ordinary.jobIds[0]],
+    pendingFollowUp: false,
+    error: { code: 'SOURCE_BLOCKED' },
+  })
+  expect(runtime.inspect(ordinary.jobIds[0])).toMatchObject({
+    state: 'partial',
+    counts: { added: 1 },
+    continuation: { available: true },
+    sources: [
+      { state: 'succeeded' },
+      { state: 'failed', error: { code: 'SOURCE_BLOCKED' } },
+    ],
+  })
+  expect(runtime.list({ state: 'active' }).jobs).toEqual([])
+  expect(
+    runtime.results({ area: initialArea, showUnavailable: true }).listings,
+  ).toEqual(saved)
+  expect(townAttempts).toBe(1)
+})
