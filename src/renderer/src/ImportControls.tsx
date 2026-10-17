@@ -156,11 +156,11 @@ export default function ImportControls({
             (job) => !activeJobs.some((activeJob) => activeJob.id === job.id),
           ),
         ]
-        const revision = JSON.stringify(
+        const jobSignature = JSON.stringify(
           next.map((job) => [job.id, job.state, job.finishedAt]),
         )
-        if (previous.current !== revision) {
-          previous.current = revision
+        if (previous.current !== jobSignature) {
+          previous.current = jobSignature
           settled.current()
         }
         setJobs(next)
