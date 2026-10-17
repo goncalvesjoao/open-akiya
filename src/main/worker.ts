@@ -23,15 +23,28 @@ const delay =
     : fastTest && process.env.OPEN_AKIYA_TEST_IMPORT_PROGRESS !== '1'
       ? 0
       : 300
+const manualRefreshTest =
+  fastTest && process.env.OPEN_AKIYA_TEST_MANUAL_REFRESH === '1'
+const adapter = syntheticAdapter(delay, [
+  fixtures[0],
+  ...uncertainFixtures,
+  ...municipalityFixtures,
+  ...unknownFixtures,
+])
 const runtime = new ImportRuntime(process.argv[2], delay, {
   ...(fastTest ? testClock() : {}),
+  ...(manualRefreshTest ? { areaFreshnessMs: 0 } : {}),
   adapters: [
-    syntheticAdapter(delay, [
-      fixtures[0],
-      ...uncertainFixtures,
-      ...municipalityFixtures,
-      ...unknownFixtures,
-    ]),
+    manualRefreshTest
+      ? {
+          ...adapter,
+          async discover(input, context) {
+            // Keep ordinary discovery observable while recent detail checks are reused.
+            await new Promise<void>((resolve) => setTimeout(resolve, 2500))
+            return adapter.discover(input, context)
+          },
+        }
+      : adapter,
   ],
 })
 const searchLocations = createLocationSearch(
