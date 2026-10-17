@@ -50,7 +50,8 @@ export function workerRequest(input: {
   queue: { tail: Promise<void> }
 }): AdapterContext['request'] {
   const sleep = input.options.wait ?? wait
-  const transport = input.options.transport ?? (async () => ({ status: 200 }))
+  const transport: WorkerTransport =
+    input.options.transport ?? (async () => ({ status: 200 }))
   const interval = Math.max(2000, input.options.minimumIntervalMs ?? 2000)
   return (kind, initialUrl, options = {}) => {
     const run = async () => {
@@ -102,39 +103,93 @@ export function workerRequest(input: {
           )
           response = await Promise.race([
             transport(url, {
-              ...Object.fromEntries(Object.entries(options).filter(([key]) => key !== 'responseMetadata')),
+              ...Object.fromEntries(
+                Object.entries(options).filter(
+                  ([key]) =>
+                    !['responseMetadata', 'maximumBytes'].includes(key),
+                ),
+              ),
               redirect: 'manual',
               signal: controller.signal,
-            }).then(async response => {
+            }).then(async (response) => {
               input.ensure()
-              if (!options.responseMetadata || [401, 403].includes(response.status)) return response
-              const headers = Object.fromEntries(Object.entries(response.headers ?? {}).map(([key,value]) => [key.toLowerCase(),value]))
-          const chunks: Uint8Array[] = []
-          let bytes = 0
-          const add = (chunk: Uint8Array) => {
-            input.accountBytes?.(chunk.byteLength)
-            bytes += chunk.byteLength
-            chunks.push(chunk)
-          }
-          if (typeof response.body === 'string') add(new TextEncoder().encode(response.body))
-          else if (response.body instanceof Uint8Array) add(response.body)
-          else if (response.body && typeof response.body === 'object' && Symbol.asyncIterator in response.body) {
-            for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
-              input.ensure(); controller.signal.throwIfAborted()
-              add(chunk)
-            }
-          } else if (response.status >= 300 && response.body == null) add(new Uint8Array())
-          else throw failure('PARSE_ERROR', 'Expected a UTF-8 export response')
-          input.ensure(); controller.signal.throwIfAborted()
-          if (response.status === 206 || headers['content-range']) throw failure('TRUNCATED_RESPONSE', 'Partial export response cannot establish a snapshot')
-          const length = headers['content-length']
-          if (length && (!/^\d+$/.test(length) || Number(length) !== bytes))
-            throw failure('TRUNCATED_RESPONSE', 'Export response length does not match its acquired bytes')
-          let body: string
-          try { body = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.concat(chunks)) }
-          catch { throw failure('PARSE_ERROR', 'Export encoding is invalid') }
+              if (!options.responseMetadata) return response
+              if ([401, 403].includes(response.status)) {
+                if (typeof response.body === 'string')
+                  input.accountBytes?.(Buffer.byteLength(response.body))
+                else if (response.body instanceof Uint8Array)
+                  input.accountBytes?.(response.body.byteLength)
+                return response
+              }
+              const headers = Object.fromEntries(
+                Object.entries(response.headers ?? {}).map(([key, value]) => [
+                  key.toLowerCase(),
+                  value,
+                ]),
+              )
+              const chunks: Uint8Array[] = []
+              let bytes = 0
+              const add = (chunk: Uint8Array) => {
+                input.ensure()
+                controller.signal.throwIfAborted()
+                input.accountBytes?.(chunk.byteLength)
+                bytes += chunk.byteLength
+                if (bytes > (options.maximumBytes ?? Infinity))
+                  throw failure(
+                    'RESPONSE_TOO_LARGE',
+                    'Export exceeds the permitted response size',
+                  )
+                chunks.push(chunk)
+              }
+              if (typeof response.body === 'string')
+                add(new TextEncoder().encode(response.body))
+              else if (response.body instanceof Uint8Array) add(response.body)
+              else if (
+                response.body &&
+                typeof response.body === 'object' &&
+                Symbol.asyncIterator in response.body
+              ) {
+                for await (const chunk of response.body as AsyncIterable<Uint8Array>) {
+                  input.ensure()
+                  controller.signal.throwIfAborted()
+                  add(chunk)
+                }
+              } else if (response.status >= 300 && response.body == null)
+                add(new Uint8Array())
+              else
+                throw failure('PARSE_ERROR', 'Expected a UTF-8 export response')
+              input.ensure()
+              controller.signal.throwIfAborted()
+              if (response.status === 206 || headers['content-range'])
+                throw failure(
+                  'TRUNCATED_RESPONSE',
+                  'Partial export response cannot establish a snapshot',
+                )
+              const length = headers['content-length']
+              if (length && (!/^\d+$/.test(length) || Number(length) !== bytes))
+                throw failure(
+                  'TRUNCATED_RESPONSE',
+                  'Export response length does not match its acquired bytes',
+                )
+              let body: string
+              try {
+                body = new TextDecoder('utf-8', { fatal: true }).decode(
+                  Buffer.concat(chunks),
+                )
+              } catch {
+                throw failure('PARSE_ERROR', 'Export encoding is invalid')
+              }
 
-              return {...response, body}
+              if (
+                /(?:captcha|verify you are human|access denied)/i.test(
+                  body.slice(0, 2048),
+                )
+              )
+                throw failure(
+                  'SOURCE_BLOCKED',
+                  'Source returned an access challenge or block',
+                )
+              return { ...response, body }
             }),
             interrupted,
           ])
@@ -218,7 +273,7 @@ export function workerRequest(input: {
           throw failure('SOURCE_BLOCKED', 'Source access is blocked')
         if (response.status < 200 || response.status >= 300)
           throw failure('CONFIGURATION_ERROR', 'Source response is unsupported')
-        if (options.responseMetadata) return {body: response.body, headers}
+        if (options.responseMetadata) return { body: response.body, headers }
         return response.body ?? null
       }
     }

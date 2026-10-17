@@ -1,12 +1,8 @@
 import { createHash } from 'node:crypto'
-import type {
-  AdapterContext,
-  Candidate,
-  NormalizedFields,
-  SourceAdapter,
-} from './adapter'
+import type { Candidate, NormalizedFields, SourceAdapter } from './adapter'
 import type { SelectedArea } from '../shared/listings'
 import { LocalApiError } from './errors'
+import { acquireTsubataSnapshot } from './tsubata-snapshot'
 export const TSUBATA_EXPORT =
   'https://www.town.tsubata.lg.jp/division/file/opendata/173614_empty_bank.csv'
 const version = 'tsubata-csv-v1'
@@ -51,19 +47,34 @@ function records(body: unknown): Record<string, string>[] {
         if (c === '\r' && text[i + 1] === '\n') i++
         rows.push(fields)
         fields = []
-        if (rows.length > 1001) fail('CSV exceeds row budget')
+        if (rows.length > 1001)
+          throw new LocalApiError(
+            409,
+            'ROW_BUDGET_EXHAUSTED',
+            'CSV exceeds acquisition row budget',
+          )
       }
     } else {
       if (closed) fail('Malformed CSV closing quote')
       cell += c
     }
   }
-  if (quoted) fail('Truncated CSV')
+  if (quoted)
+    throw new LocalApiError(
+      409,
+      'TRUNCATED_RESPONSE',
+      'CSV export ended inside a quoted field',
+    )
   if (cell || fields.length || closed) {
     fields.push(cell)
     rows.push(fields)
   }
-  if (rows.length > 1001) fail('CSV exceeds row budget')
+  if (rows.length > 1001)
+    throw new LocalApiError(
+      409,
+      'ROW_BUDGET_EXHAUSTED',
+      'CSV exceeds acquisition row budget',
+    )
   const header = rows.shift() ?? []
   const required = [
     '全国地方公共団体コード',
@@ -82,8 +93,9 @@ function records(body: unknown): Record<string, string>[] {
   return rows
     .filter((r) => r.some(Boolean))
     .map((r) => {
-      if (r.length !== header.length) fail('CSV record width changed')
-      return Object.fromEntries(header.map((k, i) => [k, r[i].trim()]))
+      return r.length !== header.length
+        ? { ID: '', invalidRow: 'CSV record width changed' }
+        : Object.fromEntries(header.map((k, i) => [k, r[i].trim()]))
     })
 }
 const identity = (r: Record<string, string>) =>
@@ -110,18 +122,8 @@ export function tsubataAdapter(options?: {
   intersectsMunicipality(area: SelectedArea): boolean
   geographyVersion: string
 }): SourceAdapter {
-  const snapshots = new WeakMap<
-    AbortSignal,
-    Promise<Record<string, string>[]>
-  >()
-  const snapshot = (context: AdapterContext) => {
-    let promise = snapshots.get(context.signal)
-    if (!promise) {
-      promise = context.request('discovery', TSUBATA_EXPORT).then(records)
-      snapshots.set(context.signal, promise)
-    }
-    return promise
-  }
+  const snapshot = (context: Parameters<SourceAdapter['fetchDetail']>[1]) =>
+    acquireTsubataSnapshot(context, version, records)
   return {
     capabilities: {
       sourceId: 'tsubata-open-data',
@@ -133,6 +135,7 @@ export function tsubataAdapter(options?: {
       dateOrdering: null,
       cursorVersion: 'full-export-v1',
       allowedHosts: ['www.town.tsubata.lg.jp'],
+      allowedUrls: [TSUBATA_EXPORT],
     },
     async discover({ area }, context) {
       if (!options || !options.intersectsMunicipality(area))
@@ -143,9 +146,14 @@ export function tsubataAdapter(options?: {
           limitation:
             'Reviewed municipality intersection unavailable; live activation remains blocked',
         }
-      const rows = await snapshot(context)
+      const data = await snapshot(context)
+      const rows = data.rows
       return {
+        caveats: [
+          'Coverage is the published municipal export, not complete vacant-home inventory; live activation remains gated',
+        ],
         candidates: rows.map((r, i): Candidate => ({
+          snapshotFingerprint: data.fingerprint,
           externalId:
             r.ID && r['全国地方公共団体コード'] === '173614'
               ? identity(r)
@@ -160,12 +168,26 @@ export function tsubataAdapter(options?: {
         })),
         nextCursor: null,
         exhausted: true,
-        limitation:
-          'Municipal export only; identity persistence, residential eligibility and live activation remain unverified',
+        limitation: null,
       }
     },
     async fetchDetail(candidate, context) {
-      const rows = await snapshot(context)
+      const data = await snapshot(context)
+      const rows = data.rows
+      if (
+        candidate.snapshotFingerprint &&
+        candidate.snapshotFingerprint !== data.fingerprint
+      )
+        throw new LocalApiError(
+          409,
+          'SNAPSHOT_INVALID',
+          'Saved processing snapshot is no longer compatible',
+        )
+      context.consumeRow()
+      // Yield between records so utility-process cancellation/quit messages
+      // can be handled even when one export contains every detail.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      context.signal.throwIfAborted()
       let matches = rows.filter(
         (r) =>
           identity(r) === candidate.externalId &&
@@ -187,9 +209,10 @@ export function tsubataAdapter(options?: {
           externalId: candidate.externalId,
         },
         url: TSUBATA_EXPORT,
-        fetchedAt: context.now(),
+        fetchedAt: data.fetchedAt,
         payload: matches,
         provenance: {
+          snapshot: data.fingerprint,
           license:
             'CC BY 4.0 https://creativecommons.org/licenses/by/4.0/; reviewed 2026-10-15',
           attribution:

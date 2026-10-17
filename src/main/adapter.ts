@@ -29,7 +29,6 @@ export type AdapterCapabilities = {
   cursorVersion: string
   allowedUrls?: string[]
   allowedHosts: string[]
-  minimumIntervalMs?: number
 }
 export type Candidate = {
   externalId: string
@@ -43,6 +42,7 @@ export type Candidate = {
   relevance: 'known_inside' | 'plausible' | 'known_outside'
 }
 export type DiscoveryPage = {
+  caveats?: string[]
   candidates: Candidate[]
   nextCursor: string | null
   exhausted: boolean
@@ -86,12 +86,19 @@ export type NormalizationResult =
 export type AdapterContext = {
   signal: AbortSignal
   consumeRow(): void
-  snapshot<T>(key: string, acquire: () => Promise<T>, maxAgeMs?: number): Promise<T>
+  snapshot<T>(
+    key: string,
+    acquire: () => Promise<T>,
+    maxAgeMs?: number,
+  ): Promise<T>
   now(): string
   request(
     kind: 'discovery' | 'detail',
     url: string,
-    options?: RequestInit & { responseMetadata?: boolean },
+    options?: RequestInit & {
+      responseMetadata?: boolean
+      maximumBytes?: number
+    },
   ): Promise<unknown>
 }
 export interface SourceAdapter {

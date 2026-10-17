@@ -482,8 +482,11 @@ type AdapterCapabilities = {
   }
   cursorVersion: string
   allowedHosts: string[]
+  allowedUrls?: string[] // optional exact permitted downloads; redirects cannot widen them
+  minimumIntervalMs?: number // source policy can only increase worker pacing
 }
 type Candidate = {
+  snapshotFingerprint?: string // worker-private immutable export binding
   externalId: string
   transactionType: ListingProjection['transactionType']
   url: string
@@ -494,6 +497,7 @@ type Candidate = {
   relevance: 'known_inside' | 'plausible' | 'known_outside'
 }
 type DiscoveryPage = {
+  caveats?: string[] // persist on success without falsely claiming incomplete traversal
   candidates: Candidate[]
   nextCursor: string | null
   exhausted: boolean
@@ -550,7 +554,11 @@ interface SourceAdapter {
 }
 ```
 
-`AdapterContext` provides AbortSignal, controlled clock and a worker-owned `request(kind: 'discovery' | 'detail', url, options)` transport. Every outbound attempt including retries, redirects and conditional checks is charged to that kind before dispatch; redirects also pass host/rate checks. No hidden adapter network calls. Feed records embedded in a charged discovery response can normalize without an invented detail request. `DetailEvidence` is private source-specific data plus source identity, validated URL, fetchedAt, and field provenance; fixtures substitute it at this boundary. `NormalizationResult` is either `{kind:'accepted', observation}` or `{kind:'rejected', error: ApiError}`. `observation` contains source identity, transaction identity, adapter version, successful-check time, normalized business fields corresponding to the projection, field provenance, and a content hash excluding observation times. Updates are field patches: omitted means no evidence, explicit null clears only a field whose removal is authoritatively established by a nonempty `provenance[fieldName]` describing that removal. A generic provenance entry does not authorize clearing. Unknown availability is no evidence of a status change; an unknown location cannot replace a known position without field-specific removal evidence. Worker validates/merges against the saved observation and writes observation plus projection atomically. A provider's sale/rent variants need distinct offer keys if its native ID identifies a property rather than an offer.
+The job budget may additionally expose `byteUsed`/`byteLimit` and `rowUsed`/`rowLimit` when a bounded snapshot source uses them. Byte usage counts physically acquired response chunks, including error/retry responses; the chunk that crosses the limit is counted and stops acquisition. The transport enforces a per-response size limit before buffering further chunks. Row usage counts attempted snapshot offer processing, including rejected rows, with fresh limits for each explicit bounded continuation. Successful checks supplied by one export do not consume invented detail requests.
+
+Worker-private `AdapterContext.snapshot(key, acquire, maxAgeMs)` durably retains only a fully acquired, successfully parsed snapshot. Its ownership is fenced like transport writes. The key includes parser version; the worker binds storage to source and frozen source/query/reference/filter scope. Compatible explicit continuation may reuse ancestor snapshots younger than 24 hours whose acquisition meets any inherited manual cutoff; attached manual follow-ups cannot reuse older evidence. Snapshot fingerprint mismatches invalidate pending row processing and trigger an explained full bounded restart, never HTTP byte-range stitching. `consumeRow()` enforces the job's row budget before processing, independently of physical network usage. Neither operation is exposed through preload or renderer projections.
+
+`AdapterContext` provides AbortSignal, controlled clock and a worker-owned `request(kind: 'discovery' | 'detail', url, options)` transport. Private options `responseMetadata` and `maximumBytes` request bounded UTF-8 stream acquisition with response headers; they are removed before the network dispatch. The deadline and cancellation remain active through response-body draining. Partial/range responses and content-length mismatches cannot establish snapshots. Every outbound attempt including retries, redirects and conditional checks is charged to that kind before dispatch; redirects also pass host/rate checks. No hidden adapter network calls. Feed records embedded in a charged discovery response can normalize without an invented detail request. `DetailEvidence` is private source-specific data plus source identity, validated URL, fetchedAt, and field provenance; fixtures substitute it at this boundary. `NormalizationResult` is either `{kind:'accepted', observation}` or `{kind:'rejected', error: ApiError}`. `observation` contains source identity, transaction identity, adapter version, successful-check time, normalized business fields corresponding to the projection, field provenance, and a content hash excluding observation times. Updates are field patches: omitted means no evidence, explicit null clears only a field whose removal is authoritatively established by a nonempty `provenance[fieldName]` describing that removal. A generic provenance entry does not authorize clearing. Unknown availability is no evidence of a status change; an unknown location cannot replace a known position without field-specific removal evidence. Worker validates/merges against the saved observation and writes observation plus projection atomically. A provider's sale/rent variants need distinct offer keys if its native ID identifies a property rather than an offer.
 
 Example discovery call: `{"area":{"center":{"latitude":35,"longitude":135},"radiusKm":5},"queryKey":"fixture-scope-v1","cursor":null}`. Result: `{"candidates":[{"externalId":"sale-1","transactionType":"sale","url":"https://example.invalid/offers/sale-1","location":{"kind":"unknown"},"municipalityId":null,"publishedAt":null,"modifiedAt":null,"relevance":"plausible"}],"nextCursor":"fixture-page-2","exhausted":false,"limitation":null}`. Detail normalization supplies the synthetic listing facts above under the same source offer identity. A final empty page returns `{"candidates":[],"nextCursor":null,"exhausted":true,"limitation":null}`. Result caps/unsupported geography instead supply a limitation and cannot certify traversal completion. Unknown location may be plausible only with scoped discovery evidence; known-outside candidates do not trigger detail requests.
 
