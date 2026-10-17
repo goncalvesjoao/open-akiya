@@ -13,7 +13,10 @@ import type { WorkerRequest } from '../shared/desktop'
 
 // Synthetic E2E imports advance pacing without waiting on wall time.
 const fastTest = process.env.OPEN_AKIYA_TEST_FAST === '1'
-const delay = fastTest ? 0 : 300
+// Keep detail work observable in the real import journey while source pacing
+// still uses the controlled clock; this switch is ignored outside test mode.
+const delay =
+  fastTest && process.env.OPEN_AKIYA_TEST_IMPORT_PROGRESS !== '1' ? 0 : 300
 const runtime = new ImportRuntime(process.argv[2], delay, {
   ...(fastTest ? testClock() : {}),
   adapters: [

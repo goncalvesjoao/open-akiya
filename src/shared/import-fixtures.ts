@@ -86,3 +86,56 @@ export const detachedImportRequest: ImportRequest = {
   state: 'cancelled',
   finishedAt: '2026-10-15T00:00:02Z',
 }
+
+// Complete inspection responses shared by renderer and worker API consumers.
+export const succeededImportJob: ImportJob = {
+  ...runningImportJob,
+  state: 'succeeded',
+  stage: 'finished',
+  finishedAt: '2026-10-15T00:00:30Z',
+  coverage: {
+    ...runningImportJob.coverage,
+    status: 'complete',
+    lastSuccessfulCheckAt: '2026-10-15T00:00:30Z',
+    freshUntil: '2026-10-16T00:00:30Z',
+    caveats: ['Configured source coverage only'],
+  },
+  sources: [
+    {
+      sourceId: 'fixture',
+      state: 'succeeded',
+      coverage: 'complete',
+      error: null,
+    },
+  ],
+}
+export const cachedImportRequest: ImportRequest = {
+  ...queuedImportRequest,
+  id: 'request-cache',
+  disposition: 'cached',
+  state: 'succeeded',
+  finishedAt: succeededImportJob.finishedAt,
+}
+export const failedImportJob: ImportJob = {
+  ...runningImportJob,
+  state: 'failed',
+  stage: 'finished',
+  finishedAt: '2026-10-15T00:00:30Z',
+  sources: [
+    {
+      sourceId: 'fixture',
+      state: 'failed',
+      coverage: 'unknown',
+      error: {
+        code: 'SOURCE_BLOCKED',
+        message: 'Sample source blocked',
+        retryable: false,
+      },
+    },
+  ],
+  error: {
+    code: 'SOURCE_BLOCKED',
+    message: 'Sample source blocked',
+    retryable: false,
+  },
+}

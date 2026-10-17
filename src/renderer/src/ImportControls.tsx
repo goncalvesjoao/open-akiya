@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import type { SelectedArea } from '../../shared/listings'
-import type { Job } from '../../shared/desktop'
+import type { ImportRequest, Job } from '../../shared/desktop'
+
+function isTerminal(state: Job['state']) {
+  return state !== 'queued' && state !== 'running'
+}
 
 export default function ImportControls({
   area,
@@ -9,12 +13,16 @@ export default function ImportControls({
   area: SelectedArea
   onSettled: () => void
 }) {
+  const [request, setRequest] = useState<ImportRequest | null>(null)
+  const requests = useRef(new Map<string, ImportRequest>())
+  const observedJobs = useRef(new Map<string, Job>())
   const [jobs, setJobs] = useState<Job[]>([])
   const [error, setError] = useState('')
   const [workerError, setWorkerError] = useState('')
   const pendingAction = useRef<{ scope: string; key: string } | null>(null)
   const [creating, setCreating] = useState(false)
   const settled = useRef(onSettled)
+  const requestRef = useRef<string | null>(null)
   const previous = useRef('')
   useEffect(() => {
     settled.current = onSettled
@@ -24,15 +32,51 @@ export default function ImportControls({
     let timer: ReturnType<typeof setTimeout>
     async function refresh() {
       try {
-        const next = (await window.openAkiya.listImports({ state: 'active' }))
-          .jobs
+        const activeJobs = (
+          await window.openAkiya.listImports({ state: 'active' })
+        ).jobs
+        for (const job of activeJobs) observedJobs.current.set(job.id, job)
+        for (const [id, snapshot] of requests.current) {
+          const nextRequest = await window.openAkiya.inspectImportRequest(id)
+          if (!active) return
+          requests.current.set(id, nextRequest)
+          if (requestRef.current === id) setRequest(nextRequest)
+          for (const jobId of nextRequest.jobIds) {
+            const job = await window.openAkiya.inspectImport(jobId)
+            if (!active) return
+            observedJobs.current.set(job.id, job)
+          }
+          if (
+            isTerminal(nextRequest.state) &&
+            !nextRequest.pendingFollowUp &&
+            nextRequest.jobIds.every((jobId) => {
+              const job = observedJobs.current.get(jobId)
+              return job !== undefined && isTerminal(job.state)
+            })
+          )
+            requests.current.delete(id)
+          if (
+            snapshot.state !== nextRequest.state &&
+            isTerminal(nextRequest.state)
+          )
+            settled.current()
+        }
+        // Active jobs disappear from the queue at completion; inspect retained IDs.
+        for (const [id, snapshot] of observedJobs.current) {
+          if (
+            !isTerminal(snapshot.state) &&
+            !activeJobs.some((job) => job.id === id)
+          ) {
+            observedJobs.current.set(
+              id,
+              await window.openAkiya.inspectImport(id),
+            )
+          }
+        }
         if (!active) return
+        const next = [...observedJobs.current.values()]
         const revision = JSON.stringify(
-          next.map((job) => [
-            job.id,
-            job.state,
-            job.counts.added + job.counts.updated + job.counts.unchanged,
-          ]),
+          next.map((job) => [job.id, job.state, job.finishedAt]),
         )
         if (previous.current !== revision) {
           previous.current = revision
@@ -66,20 +110,25 @@ export default function ImportControls({
             pendingAction.current = { scope, key: crypto.randomUUID() }
           const idempotencyKey = pendingAction.current.key
           try {
-            await window.openAkiya.createImportRequest({
+            const accepted = await window.openAkiya.createImportRequest({
               intent: 'import',
               area,
               idempotencyKey,
             })
-            setJobs(
-              (await window.openAkiya.listImports({ state: 'active' })).jobs,
-            )
+            requests.current.set(accepted.id, accepted)
+            requestRef.current = accepted.id
+            setRequest(accepted)
+            if (isTerminal(accepted.state)) settled.current()
             // A fast import can finish between active-queue reads.
             previous.current = ''
             pendingAction.current = null
-          } catch {
+          } catch (failure) {
+            const code =
+              failure && typeof failure === 'object' && 'code' in failure
+                ? String(failure.code)
+                : 'TRANSPORT_ERROR'
             setError(
-              'Could not start import. Inspect the queue before retrying.',
+              `Could not start import (${code}). Inspect the queue before retrying.`,
             )
           } finally {
             setCreating(false)
@@ -88,6 +137,14 @@ export default function ImportControls({
       >
         Import sample listings
       </button>
+      {request && (
+        <p role="status">
+          Request accepted · {request.disposition} · {request.state}
+          {request.pendingFollowUp && ' · Follow-up pending'} · Request area:{' '}
+          {request.area.center.latitude}, {request.area.center.longitude} ·{' '}
+          {request.area.radiusKm} km
+        </p>
+      )}
       <p>
         Closing the window keeps imports running. Reopen from the desktop
         launcher. Use Quit Open Akiya or Ctrl/Cmd+Q to exit.
@@ -97,12 +154,39 @@ export default function ImportControls({
         {jobs.map((job) => (
           <li key={job.id}>
             <strong>
-              {job.state === 'succeeded' ? 'Search finished' : job.state}
+              {job.state === 'succeeded'
+                ? 'Search finished'
+                : job.state === 'failed'
+                  ? 'Failed'
+                  : job.state === 'cancelled'
+                    ? 'Cancelled'
+                    : job.state === 'partial'
+                      ? 'Partial results'
+                      : job.state}
             </strong>{' '}
-            · {job.area.center.latitude}, {job.area.center.longitude} ·{' '}
-            {job.area.radiusKm} km ·{' '}
+            · Job area: {job.area.center.latitude}, {job.area.center.longitude}{' '}
+            · {job.area.radiusKm} km ·{' '}
             {job.counts.added + job.counts.updated + job.counts.unchanged} saved
             ({job.counts.added} added, {job.counts.updated} updated)
+            <span>
+              {' '}
+              · Stage: {job.stage} · {job.counts.discovered} discovered ·{' '}
+              {job.counts.checked} checked · {job.counts.rejected} rejected
+            </span>
+            <p>
+              Coverage {job.coverage.status} · Last successful check:{' '}
+              {job.coverage.lastSuccessfulCheckAt ?? 'Unknown'}
+            </p>
+            {job.coverage.caveats.map((caveat) => (
+              <p key={caveat}>{caveat}</p>
+            ))}
+            {job.sources
+              .filter((source) => source.error)
+              .map((source) => (
+                <p key={source.sourceId}>
+                  {source.sourceId}: {source.error?.message}
+                </p>
+              ))}
             {job.error && <span> · {job.error.message}</span>}
             {(job.state === 'running' || job.state === 'queued') && (
               <button
