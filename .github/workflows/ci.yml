@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, tests and Electron acceptance
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm test
+      # Electron supplies Chromium; only the Linux system dependencies are needed.
+      - name: Install Electron test dependencies
+        run: npx playwright install-deps chromium
+      # test:e2e already runs the TypeScript check and production build.
+      - name: Build and run Electron acceptance
+        run: xvfb-run --auto-servernum npm run test:e2e
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: electron-test-results
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
