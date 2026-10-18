@@ -34,6 +34,8 @@ npm run package       # Build an unpacked application in release/
 npm run dist          # Build the platform installer (Linux AppImage by default)
 ```
 
+GitHub Actions runs lint, formatting, unit tests and Electron acceptance on pull requests and pushes to `main`. CI uses Node.js 24 and an Ubuntu virtual display; `test:e2e` includes type checking and the production build. Failed Electron tests retain diagnostics as the `electron-test-results` artifact for seven days. Run the same acceptance suite on a headless Linux machine with `xvfb-run --auto-servernum npm run test:e2e` after `npx playwright install-deps chromium`.
+
 The minimal integrated Electron journey covers selected-area import, sandboxed preload access, reload and persisted results after relaunch. It requires a graphical session, uses isolated temporary application data and blocks external HTTPS requests. Worker tests use temporary SQLite databases and deterministic synthetic adapters without live source requests. Broader UI acceptance remains assigned to #7. Installer production/signing and Windows/macOS validation remain release work.
 
 ## Local data and background imports
