@@ -1,5 +1,8 @@
 # Open Akiya
 
+> [!warning]
+> I'm archiving this experimental project, as a frozen record of the end result of grilling and idea, defining specs for it, writing tickets for those specs and then implementing them, using skills alone, no software factory.
+
 Discover Japan’s vacant homes, freely.
 
 Open Akiya is a local desktop application built with Electron, React and TypeScript. A separate utility process runs imports and owns a SQLite database on your computer. Docker, Supabase and database credentials are unnecessary.
